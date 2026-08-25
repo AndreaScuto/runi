@@ -51,6 +51,30 @@ function shortId(id: string): string {
   return id.slice(0, 14);
 }
 
+export function leoStatus(job: Job, at = Date.now()): string {
+  const elapsed = at - Date.parse(job.startedAt ?? job.createdAt);
+  return `🐕 Leo · supervising ${shortId(job.id)} · ${job.status.toUpperCase()} · attempt ${job.attempts}/${job.definition.budget.maxAttempts} · ${formatDuration(elapsed)}`;
+}
+
+async function superviseWithLeo(store: RuniStore, jobId: string): Promise<Job> {
+  const line = () => leoStatus(store.requireJob(jobId));
+  const running = supervisor(store).run(jobId);
+  if (!process.stdout.isTTY) {
+    console.log(line());
+    return running;
+  }
+  const draw = () => process.stdout.write(`\r\x1b[2K${line()}`);
+  draw();
+  const timer = setInterval(draw, 250);
+  timer.unref();
+  try {
+    return await running;
+  } finally {
+    clearInterval(timer);
+    process.stdout.write("\r\x1b[2K");
+  }
+}
+
 function printJob(job: Job): void {
   const elapsed = Date.now() - Date.parse(job.startedAt ?? job.createdAt);
   console.log(`\nJOB ${job.id}`);
@@ -124,7 +148,7 @@ async function start(args: ParsedArguments): Promise<number> {
     };
     store.createJob(job);
     console.log(`Started durable job ${job.id}. State is persisted in ${databasePath(workingDirectory)}.`);
-    const completed = await supervisor(store).run(job.id);
+    const completed = await superviseWithLeo(store, job.id);
     printJob(completed);
     return completed.status === "complete" ? 0 : 1;
   } finally {
@@ -143,7 +167,7 @@ async function resume(args: ParsedArguments): Promise<number> {
   try {
     const job = store.resumeJob(jobId);
     console.log(`Resuming ${job.id} from ${job.status}.`);
-    const completed = await supervisor(store).run(job.id);
+    const completed = await superviseWithLeo(store, job.id);
     printJob(completed);
     return completed.status === "complete" ? 0 : 1;
   } finally {

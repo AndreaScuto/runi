@@ -6,6 +6,8 @@ Launch a coding job, let your agent work, and come back later. Runi keeps the jo
 
 > The agent can die. The job doesn't.
 
+🐕 **Leo is watching.** He is Runi's mascot and the CLI signal that your worker is still being supervised.
+
 ## Why Runi?
 
 Coding agents run in sessions. Real engineering work is a job that may outlive a terminal, a provider connection, or one model context.
@@ -31,9 +33,11 @@ pnpm run check
 pnpm run start -- start examples/command-task.json
 ```
 
-The example completes only after the configured verification succeeds:
+During the run, Leo exposes the persisted job state:
 
 ```text
+🐕 Leo · supervising rn_7c16257b19 · WORKING · attempt 1/2 · 1s
+
 JOB rn_7c16257b199e401a
 State       COMPLETE
 Attempts    1 / 2
@@ -112,6 +116,14 @@ runi stop <job-id>
 
 `resume` starts a fresh worker with bounded recovery context and the current repository state. It does not depend on restoring the previous model session.
 
+## Meet Leo 🐕
+
+Leo does not write code and does not make lifecycle decisions. He simply shows that Runi is still supervising the active job.
+
+In an interactive terminal, Leo's line updates in place with state, attempt budget, and elapsed time. In logs and CI, Runi prints one stable supervision line instead of terminal animation.
+
+If Leo says `WORKING`, the worker is working. If Runi says `COMPLETE`, the evidence passed. Leo never guesses.
+
 ## Use a deterministic command worker
 
 The generic command adapter is useful for integration tests and ordinary automation:
@@ -162,7 +174,7 @@ Reports include Markdown, JSON, CSV, raw worker logs, verification evidence, dur
 ## Project direction
 
 - **v0.1:** durable, verified, bounded single-worker supervisor.
-- **v0.2 (next):** adaptive recovery — failure classification, progress detection, recovery strategy selection, fault-injection benchmarks, and Leo's supervision experience.
+- **v0.2 (in development):** adaptive recovery — failure classification, progress detection, recovery strategy selection, fault-injection benchmarks, and Leo's supervision experience.
 - Later versions may add structured execution knowledge, multiple workers, and provider-aware routing only after the simpler runtime proves its value.
 
 Not in the current core: web dashboard, cloud service, multi-agent scheduling, automatic provider switching, or repository rollback.

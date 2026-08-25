@@ -6,7 +6,7 @@ Versions describe product outcomes, not a backlog. Code structure and implementa
 
 Own a local job beyond one agent session and complete it only with host-side evidence. The core includes persistence, lifecycle, verification, retry, bounded execution, basic stagnation detection, pause/resume, and diagnostic events.
 
-## v0.2 — Adaptive supervisor (next target)
+## v0.2 — Adaptive supervisor (current target)
 
 Make recovery explainable and evidence-driven: classify failures, detect meaningful progress, select an explicit recovery strategy, and validate recovery through deterministic fault injection. Keep one supervised worker; do not add provider switching, automatic rollback, or multi-agent scheduling yet.
 
