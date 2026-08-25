@@ -4,7 +4,8 @@
   "description": "Durable, verified execution for coding agents.",
   "type": "module",
   "bin": {
-    "runi": "./dist/cli.js"
+    "runi": "./dist/cli.js",
+    "runi-benchmark": "./dist/benchmark/cli.js"
   },
   "files": [
     "dist",
@@ -18,7 +19,8 @@
     "build": "tsc --project tsconfig.json",
     "test": "pnpm run build && node --test dist/test",
     "check": "pnpm run build && node --test dist/test",
-    "start": "node dist/cli.js"
+    "start": "node dist/cli.js",
+    "benchmark": "node dist/benchmark/cli.js"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

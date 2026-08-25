@@ -105,6 +105,43 @@ runi stop <job-id>
 
 On every worker launch Runi records a checkpoint with job state and, where Git is available, the current revision and diff. If Runi or a worker exits, `runi resume <job-id>` runs the persisted job again with recovery context rather than relying on the old model session.
 
+## Reusable benchmark: OpenCode vs OpenCode + Runi
+
+Runi includes a paired benchmark harness for repeatable regression testing. It runs ten small deterministic coding tasks twice, each in a new disposable workspace:
+
+- **OpenCode direct**: baseline check, one OpenCode operation, final hidden acceptance check.
+- **OpenCode + Runi**: the same prompt and model via the Runi supervisor, with the same baseline and final hidden acceptance check, retry budget and wall-time budget.
+
+The timer covers the complete operation, including verification. A task counts as successful only when the host-side hidden acceptance check exits with code 0. This prevents a worker's successful exit from being mistaken for a correct implementation.
+
+Install and authenticate OpenCode first. On Windows, an explicit local executable keeps the benchmark isolated from global tools:
+
+```powershell
+pnpm --dir .benchmark-tools add opencode-ai
+.\.benchmark-tools\node_modules\opencode-ai\bin\opencode.exe auth list
+pnpm run build
+pnpm run benchmark -- run `
+  --opencode .\.benchmark-tools\node_modules\opencode-ai\bin\opencode.exe `
+  --count 10 `
+  --max-attempts 3 `
+  --wall-time 10m
+```
+
+Use `--model provider/model` to pin the same model in both modes. On macOS/Linux, pass the corresponding `opencode` executable path. The run writes an ignored, timestamped directory under `benchmarks/runs/` containing:
+
+- `BENCHMARK_REPORT.md`: verified-completion rate, total/mean/median/P95 execution time, retries, token/cost comparison and per-operation table.
+- `summary.json`: complete structured evidence, including verifier outputs and paths to the isolated workspaces.
+- `cases.csv`: one row per operation for spreadsheets or CI analysis.
+- `cases/<scenario>/<mode>/worker.log`: raw worker output.
+
+When OpenCode/provider JSON output exposes token or cost telemetry, the report aggregates it by independent worker attempt and shows **tokens/cost saved by Runi** (or additional usage, if negative). If the selected provider does not expose those fields, the report explicitly shows `N/A`; it never invents zero token or cost usage.
+
+Regenerate a Markdown/CSV report from an existing JSON run without consuming more model tokens:
+
+```bash
+pnpm run benchmark -- report benchmarks/runs/<run-directory>
+```
+
 ## Lifecycle and evidence
 
 ```text

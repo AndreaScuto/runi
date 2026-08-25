@@ -96,6 +96,7 @@ Start options:
   --agent <opencode|command>     Worker adapter (default: opencode)
   --command <command>            Command for the generic command adapter
   --opencode-binary <path>       OpenCode executable (default: opencode)
+  --opencode-model <provider/id> Explicit OpenCode model for this run
   --verify <command>             Required verification command; repeatable
   --max-attempts <n>             Hard attempt budget
   --wall-time <duration>         Hard wall-time budget (for example: 90m)
@@ -116,11 +117,13 @@ async function start(args: ParsedArguments): Promise<number> {
   const agent = option(args, "agent");
   const command = option(args, "command");
   const binary = option(args, "opencode-binary");
+  const model = option(args, "opencode-model");
   const verification = options(args, "verify");
   const wallTime = option(args, "wall-time");
   if (agent !== undefined) overrides.agent = agent;
   if (command !== undefined) overrides.command = command;
   if (binary !== undefined) overrides.binary = binary;
+  if (model !== undefined) overrides.model = model;
   if (verification !== undefined) overrides.verification = verification;
   if (parsedAttempts !== undefined) overrides.maxAttempts = parsedAttempts;
   if (wallTime !== undefined) overrides.wallTime = wallTime;

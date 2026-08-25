@@ -7,6 +7,7 @@ export interface StartOverrides {
   agent?: string;
   command?: string;
   binary?: string;
+  model?: string;
   verification?: string[];
   maxAttempts?: number;
   wallTime?: string;
@@ -75,6 +76,8 @@ function parseExecutor(value: unknown): ExecutorConfig {
   const kind = parseAgent(value.kind ?? value.agent);
   if (value.command !== undefined && typeof value.command !== "string") throw new Error("executor.command must be a string.");
   if (value.binary !== undefined && typeof value.binary !== "string") throw new Error("executor.binary must be a string.");
+  if (value.model !== undefined && typeof value.model !== "string") throw new Error("executor.model must be a string.");
+  if (value.autoApprove !== undefined && typeof value.autoApprove !== "boolean") throw new Error("executor.autoApprove must be a boolean.");
   if (kind === "command" && (typeof value.command !== "string" || !value.command.trim())) {
     throw new Error("executor.command is required when executor.kind is `command`.");
   }
@@ -82,6 +85,8 @@ function parseExecutor(value: unknown): ExecutorConfig {
     kind,
     ...(typeof value.command === "string" ? { command: value.command } : {}),
     ...(typeof value.binary === "string" ? { binary: value.binary } : {}),
+    ...(typeof value.model === "string" ? { model: value.model } : {}),
+    ...(typeof value.autoApprove === "boolean" ? { autoApprove: value.autoApprove } : {}),
   };
 }
 
@@ -101,10 +106,13 @@ export async function loadTaskDefinition(taskPath: string, overrides: StartOverr
   const agent = overrides.agent === undefined ? sourceExecutor.kind : parseAgent(overrides.agent);
   const command = overrides.command ?? sourceExecutor.command;
   const binary = overrides.binary ?? sourceExecutor.binary;
+  const model = overrides.model ?? sourceExecutor.model;
   const executor: ExecutorConfig = {
     kind: agent,
     ...(command === undefined ? {} : { command }),
     ...(binary === undefined ? {} : { binary }),
+    ...(model === undefined ? {} : { model }),
+    ...(sourceExecutor.autoApprove === undefined ? {} : { autoApprove: sourceExecutor.autoApprove }),
   };
   if (executor.kind === "command" && !executor.command) throw new Error("--command is required for the command adapter.");
 

@@ -5,10 +5,11 @@ export class OpenCodeAdapter implements AgentAdapter {
   readonly kind = "opencode" as const;
 
   async start(job: Job, context: string): Promise<WorkerSession> {
-    const binary = job.definition.executor.binary ?? "opencode";
-    return new ProcessWorkerSession(binary, ["run", "--format", "json", this.prompt(job, context)], {
+    const invocation = openCodeInvocation(job, context);
+    return new ProcessWorkerSession(invocation.binary, invocation.args, {
       cwd: job.definition.workingDirectory,
       env: { ...process.env, RUNI_JOB_ID: job.id, RUNI_ATTEMPT: String(job.attempts) },
+      shell: needsWindowsShell(invocation.binary),
     });
   }
 
@@ -16,8 +17,32 @@ export class OpenCodeAdapter implements AgentAdapter {
     return this.start(job, `${context}\n\nThis is a resumed durable job. Inspect the current repository before changing it.`);
   }
 
-  private prompt(job: Job, context: string): string {
-    return [
+}
+
+export interface OpenCodeInvocation {
+  binary: string;
+  args: string[];
+}
+
+/** Windows package-manager shims need cmd.exe; native executables do not. */
+export function needsWindowsShell(binary: string): boolean {
+  return process.platform === "win32" && /\.(?:cmd|bat)$/i.test(binary);
+}
+
+/**
+ * Shared by Runi and its benchmark harness so the direct and supervised modes
+ * invoke the same OpenCode worker prompt and flags.
+ */
+export function openCodeInvocation(job: Job, context: string): OpenCodeInvocation {
+  const args = ["run", "--format", "json"];
+  if (job.definition.executor.autoApprove === true) args.push("--auto");
+  if (job.definition.executor.model !== undefined) args.push("--model", job.definition.executor.model);
+  args.push(openCodePrompt(job, context));
+  return { binary: job.definition.executor.binary ?? "opencode", args };
+}
+
+export function openCodePrompt(job: Job, context: string): string {
+  return [
       "You are the execution worker for a durable Runi job.",
       "Work directly in the assigned repository and make concrete progress toward the goal.",
       "Runi, not you, decides completion and will independently run the verification contract.",
@@ -25,6 +50,5 @@ export class OpenCodeAdapter implements AgentAdapter {
       "",
       `Goal:\n${job.definition.goal}`,
       context ? `\nContext from prior attempts:\n${context}` : "",
-    ].join("\n");
-  }
+  ].join("\n");
 }

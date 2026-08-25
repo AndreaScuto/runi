@@ -40,6 +40,10 @@ export interface ExecutorConfig {
   command?: string;
   /** Optional path or command name of the OpenCode executable. */
   binary?: string;
+  /** Explicit OpenCode model in provider/model form. */
+  model?: string;
+  /** Pass OpenCode's non-interactive auto-approval flag. Use only in disposable workspaces. */
+  autoApprove?: boolean;
 }
 
 export interface TaskDefinition {

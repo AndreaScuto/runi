@@ -1,5 +1,7 @@
 node_modules/
 .pnpm-store/
+.benchmark-tools/
+benchmarks/runs/
 dist/
 .runi/
 coverage/
