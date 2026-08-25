@@ -32,10 +32,12 @@ GitHub requires authentication even when installing a public npm package:
 ```bash
 npm login --scope=@andreascuto --auth-type=legacy --registry=https://npm.pkg.github.com
 npm install --global @andreascuto/runi
-runi help
+runi
 ```
 
 Use a GitHub personal access token (classic) with `read:packages` as the password. Source archives remain attached automatically to each GitHub Release.
+
+Running `runi` opens Leo's interactive home screen, where you can create a guided job, grill an idea, start a task file, or inspect existing jobs. Direct commands such as `runi start` and `runi status` remain available for scripts and experienced users.
 
 ## Try it in two minutes
 

@@ -16,6 +16,8 @@ Support OpenCode, Codex CLI, and Claude Code behind the same worker contract. Se
 
 Preserve hand-written task files while adding guided task creation from a short job. Grill mode may use the explicitly selected agent to turn an underspecified idea into user-chosen implementation decisions and an editable verification proposal; both modes must persist a normal task and converge on the existing supervision contract.
 
+Invoking `runi` without arguments opens a Leo-led interactive home for the common operations. Direct subcommands remain stable for automation and advanced use.
+
 Ship a tested scoped npm package through GitHub Packages for stable releases so developers can install the CLI without cloning the repository.
 
 ## v0.3 — Structured intelligence

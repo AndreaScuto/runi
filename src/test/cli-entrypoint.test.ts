@@ -15,6 +15,25 @@ test("compiled CLI executes when invoked directly", () => {
   assert.match(result.stdout, /opencode\|codex\|claude\|command/);
 });
 
+test("--help remains non-interactive", () => {
+  const result = spawnSync(process.execPath, [resolve("dist", "cli.js"), "--help"], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Usage:/);
+  assert.doesNotMatch(result.stdout, /Choose:/);
+});
+
+test("no-argument CLI opens Leo's interactive home screen", () => {
+  const result = spawnSync(process.execPath, [resolve("dist", "cli.js")], {
+    encoding: "utf8",
+    input: "0\n",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /🐕 Leo is ready to supervise/);
+  assert.match(result.stdout, /Create a guided job/);
+  assert.match(result.stdout, /Show jobs/);
+});
+
 test("grill mode refines the goal and lets users edit AI verification", () => {
   const workingDirectory = mkdtempSync(join(tmpdir(), "runi-grill-"));
   try {

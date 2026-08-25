@@ -292,10 +292,11 @@ function stop(args: ParsedArguments): number {
 export async function run(argv: string[]): Promise<number> {
   const args = parseArguments(argv);
   const command = args.positionals[0];
-  if (command === undefined || command === "help" || args.values.help === true) {
+  if (command === "help" || args.values.help === true) {
     help();
     return 0;
   }
+  if (command === undefined) return home();
   if (command === "start") return start(args);
   if (command === "status") return status(args);
   if (command === "inspect") return inspect(args);
@@ -304,6 +305,54 @@ export async function run(argv: string[]): Promise<number> {
   if (command === "resume") return resume(args);
   if (command === "stop") return stop(args);
   throw new Error(`Unknown command: ${command}`);
+}
+
+async function home(): Promise<number> {
+  console.log(`Runi 0.2
+🐕 Leo is ready to supervise.
+
+1  Create a guided job
+2  Grill an idea with AI
+3  Start from a task file
+4  Show jobs
+5  Help
+0  Exit
+`);
+  const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  const iterator = lines[Symbol.asyncIterator]();
+  const ask = async (question: string): Promise<string | undefined> => {
+    process.stdout.write(question);
+    const answer = await iterator.next();
+    return answer.done ? undefined : answer.value.trim();
+  };
+  let nextArguments: string[] | undefined;
+  try {
+    while (nextArguments === undefined) {
+      const choice = await ask("Choose: ");
+      if (choice === undefined || choice === "0") return 0;
+      if (choice === "1" || choice === "2" || choice === "3") {
+        const value = await ask(choice === "3" ? "Task file: " : "What should Runi build? ");
+        if (!value) {
+          console.log("Nothing started.");
+          return 0;
+        }
+        nextArguments = choice === "1"
+          ? ["start", value, "--guided"]
+          : choice === "2"
+            ? ["start", value, "--grill"]
+            : ["start", value];
+      } else if (choice === "4") {
+        nextArguments = ["status"];
+      } else if (choice === "5") {
+        nextArguments = ["help"];
+      } else {
+        console.log("Choose a number from 0 to 5.");
+      }
+    }
+  } finally {
+    lines.close();
+  }
+  return run(nextArguments);
 }
 
 function isDirectExecution(): boolean {
