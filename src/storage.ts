@@ -182,8 +182,12 @@ export class RuniStore {
   }
 
   countRecentFailureFingerprint(id: string, fingerprint: string, limit = 6): number {
-    const events = this.getEvents(id, limit);
-    return events.filter((entry) => entry.type === "WORKER_FAILED" && entry.payload.fingerprint === fingerprint).length;
+    const rows = this.database.prepare(`
+      SELECT payload_json FROM events
+      WHERE job_id = ? AND event_type = 'WORKER_FAILED'
+      ORDER BY id DESC LIMIT ?
+    `).all(id, limit) as Row[];
+    return rows.filter((row) => parseJson<Record<string, unknown>>(row.payload_json, "event payload").fingerprint === fingerprint).length;
   }
 
   createCheckpoint(checkpoint: Omit<Checkpoint, "id" | "createdAt">): Checkpoint {

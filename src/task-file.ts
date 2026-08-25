@@ -112,13 +112,17 @@ export async function loadTaskDefinition(taskPath: string, overrides: StartOverr
   const maxAttempts = overrides.maxAttempts ?? sourceBudget.maxAttempts;
   const wallTimeMs = overrides.wallTime === undefined ? sourceBudget.wallTimeMs : parseDuration(overrides.wallTime);
   if (!Number.isInteger(maxAttempts) || maxAttempts < 1) throw new Error("--max-attempts must be a positive integer.");
+  const verification = overrides.verification === undefined ? parseVerification(source.verification) : overrides.verification.map((command) => ({ command }));
+  if (verification.length === 0) {
+    throw new Error("A Runi task requires at least one verification command. Add `verification` to task JSON or pass --verify.");
+  }
 
   return {
     goal: requireGoal(source.goal),
     taskPath: absoluteTaskPath,
     workingDirectory: resolve(overrides.workingDirectory ?? process.cwd()),
     executor,
-    verification: overrides.verification === undefined ? parseVerification(source.verification) : overrides.verification.map((command) => ({ command })),
+    verification,
     budget: { maxAttempts, ...(wallTimeMs === undefined ? {} : { wallTimeMs }) },
   };
 }

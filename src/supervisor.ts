@@ -19,6 +19,11 @@ export class Supervisor {
     let job = this.store.requireJob(jobId);
     if (isTerminal(job.status) || job.status === "paused") return job;
 
+    if (job.definition.verification.length === 0) {
+      this.fail(job, "Completion contract requires at least one verification command.");
+      return this.store.requireJob(jobId);
+    }
+
     if (job.status === "created") {
       job = this.store.transitionJob(job.id, "planning", "JOB_PLANNING_STARTED");
     }
@@ -27,6 +32,11 @@ export class Supervisor {
       this.store.markBaseline(job.id);
       this.store.appendEvent(job.id, "BASELINE_COMPLETE", { passed: verificationPassed(baseline), checks: baseline.length });
       job = this.store.requireJob(job.id);
+      const baselineBudget = checkBudget(job);
+      if (baselineBudget.exceeded) {
+        this.exhaust(job, baselineBudget.reason!);
+        return this.store.requireJob(job.id);
+      }
       if (job.status === "paused" || isTerminal(job.status)) return job;
     }
     if (job.status === "planning") job = this.store.transitionJob(job.id, "working", "JOB_WORK_STARTED");
@@ -108,6 +118,11 @@ export class Supervisor {
     const checks = await runVerification(this.store, job, "final");
     const current = this.store.requireJob(job.id);
     if (current.status === "paused" || current.status === "cancelled" || isTerminal(current.status)) return;
+    const budget = checkBudget(current);
+    if (budget.exceeded) {
+      this.exhaust(current, budget.reason!);
+      return;
+    }
     if (verificationPassed(checks)) {
       this.store.transitionJob(current.id, "reviewing", "VERIFICATION_PASSED", { checks: checks.length });
       return;
@@ -124,7 +139,8 @@ export class Supervisor {
 
   private async recover(job: Job, detail: string, source: "worker" | "verification"): Promise<void> {
     const fingerprint = createHash("sha256").update(`${source}:${detail.replace(/\d+/g, "#")}`).digest("hex").slice(0, 16);
-    this.store.appendEvent(job.id, "WORKER_FAILED", { source, fingerprint, detail: detail.slice(-8_000) });
+    const failureType = this.classifyFailure(detail);
+    this.store.appendEvent(job.id, "WORKER_FAILED", { source, failureType, fingerprint, detail: detail.slice(-8_000) });
     const current = this.store.requireJob(job.id);
     if (current.attempts >= current.definition.budget.maxAttempts) {
       this.exhaust(current, `Maximum attempts reached (${current.definition.budget.maxAttempts})`);
@@ -135,7 +151,7 @@ export class Supervisor {
       this.fail(current, `Stagnation detected: the same ${source} failure occurred ${repeated} times.`);
       return;
     }
-    this.store.transitionJob(current.id, "repairing", "RECOVERY_SCHEDULED", { source, fingerprint, repeated });
+    this.store.transitionJob(current.id, "repairing", "RECOVERY_SCHEDULED", { source, failureType, fingerprint, repeated });
   }
 
   private launchBudget(job: Job): string | undefined {
@@ -220,5 +236,12 @@ export class Supervisor {
 
   private errorMessage(error: unknown): string {
     return error instanceof Error ? error.stack ?? error.message : String(error);
+  }
+
+  private classifyFailure(detail: string): "transient" | "execution" | "policy" {
+    const normalized = detail.toLowerCase();
+    if (/\b(429|rate limit|timeout|timed out|econnreset|enetunreach|enotfound|network)\b/.test(normalized)) return "transient";
+    if (/\b(permission denied|forbidden|budget exceeded)\b/.test(normalized)) return "policy";
+    return "execution";
   }
 }

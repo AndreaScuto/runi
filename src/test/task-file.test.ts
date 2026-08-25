@@ -26,3 +26,11 @@ test("task JSON produces a validated completion contract", async (t) => {
   assert.equal(task.verification[0]?.label, "verification");
   assert.equal(task.budget.wallTimeMs, 2_700_000);
 });
+
+test("task parsing rejects a task without independent verification", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "runi-task-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const taskPath = join(root, "task.json");
+  await writeFile(taskPath, JSON.stringify({ goal: "No proof", executor: { kind: "command", command: "echo work" } }));
+  await assert.rejects(loadTaskDefinition(taskPath, { workingDirectory: root }), /requires at least one verification command/);
+});

@@ -15,8 +15,23 @@ export async function executeVerificationCommand(
   job: Job,
   phase: VerificationResult["phase"],
   definition: VerificationCommand,
+  wallTimeRemainingMs?: number,
 ): Promise<VerificationResult> {
   const startedAt = now();
+  const timeoutMs = Math.min(definition.timeoutMs ?? 10 * 60_000, wallTimeRemainingMs ?? Number.POSITIVE_INFINITY);
+  if (timeoutMs <= 0) {
+    return {
+      jobId: job.id,
+      phase,
+      command: definition.command,
+      label: definition.label ?? definition.command,
+      exitCode: null,
+      timedOut: true,
+      output: "Runi wall-time budget was exhausted before this verification command could start.",
+      startedAt,
+      completedAt: now(),
+    };
+  }
   const output: string[] = [];
   const child = spawn(definition.command, {
     cwd: job.definition.workingDirectory,
@@ -30,7 +45,7 @@ export async function executeVerificationCommand(
   const timeout = setTimeout(() => {
     timedOut = true;
     child.kill("SIGTERM");
-  }, definition.timeoutMs ?? 10 * 60_000);
+  }, timeoutMs);
 
   const exitCode = await new Promise<number | null>((resolve) => {
     let settled = false;
@@ -67,14 +82,18 @@ export async function runVerification(
 ): Promise<VerificationResult[]> {
   const results: VerificationResult[] = [];
   for (const command of job.definition.verification) {
-    const result = await executeVerificationCommand(job, phase, command);
+    const wallTime = job.definition.budget.wallTimeMs;
+    const elapsed = Date.now() - Date.parse(job.startedAt ?? job.createdAt);
+    const remaining = wallTime === undefined ? undefined : Math.max(0, wallTime - elapsed);
+    const result = await executeVerificationCommand(job, phase, command, remaining);
     results.push(store.saveVerification(result));
+    if (result.timedOut && remaining !== undefined && remaining <= (command.timeoutMs ?? 10 * 60_000)) break;
   }
   return results;
 }
 
 export function verificationPassed(results: VerificationResult[]): boolean {
-  return results.every((result) => result.exitCode === 0 && !result.timedOut);
+  return results.length > 0 && results.every((result) => result.exitCode === 0 && !result.timedOut);
 }
 
 export function describeVerificationFailure(results: VerificationResult[]): string {

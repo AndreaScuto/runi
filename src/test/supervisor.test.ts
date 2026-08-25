@@ -81,6 +81,30 @@ test("supervisor retries a failed worker and records recovery", async (t) => {
   assert.ok(store.getEvents(job.id).some((entry) => entry.type === "RECOVERY_SCHEDULED"));
 });
 
+test("supervisor stops an obvious repeated failure loop before exhausting attempts", async (t) => {
+  const { root, store, job } = await fixture();
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  const timestamp = now();
+  const loopJob: Job = { ...job, id: "rn_loop", createdAt: timestamp, updatedAt: timestamp, definition: { ...job.definition, budget: { maxAttempts: 5, wallTimeMs: 60_000 } } };
+  store.createJob(loopJob);
+  const adapter = new ScriptedAdapter([1, 1, 1, 1]);
+  const result = await new Supervisor(store, new Map([["command", adapter]])).run(loopJob.id);
+  assert.equal(result.status, "failed");
+  assert.equal(result.attempts, 3);
+  assert.match(result.exitReason ?? "", /Stagnation detected/);
+});
+
+test("supervisor refuses completion when a persisted job has no completion contract", async (t) => {
+  const { root, store, job } = await fixture();
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  const timestamp = now();
+  const unverified: Job = { ...job, id: "rn_unverified", createdAt: timestamp, updatedAt: timestamp, definition: { ...job.definition, verification: [] } };
+  store.createJob(unverified);
+  const result = await new Supervisor(store, new Map([["command", new ScriptedAdapter([0])]])).run(unverified.id);
+  assert.equal(result.status, "failed");
+  assert.match(result.exitReason ?? "", /Completion contract/);
+});
+
 test("a persisted working job resumes with a new worker session", async (t) => {
   const { root, store, job } = await fixture();
   t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
