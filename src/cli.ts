@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { ClaudeCodeAdapter } from "./adapters/claude.js";
@@ -13,6 +14,7 @@ import { now, type AgentAdapter, type Job } from "./domain.js";
 import { RuniStore } from "./storage.js";
 import { loadTaskDefinition, type StartOverrides } from "./task-file.js";
 import { Supervisor } from "./supervisor.js";
+import { createGuidedTask } from "./wizard.js";
 
 const CLI_OPTIONS = {
   agent: { type: "string" },
@@ -26,6 +28,8 @@ const CLI_OPTIONS = {
   "wall-time": { type: "string" },
   workdir: { type: "string" },
   help: { type: "boolean" },
+  guided: { type: "boolean" },
+  grill: { type: "boolean" },
 } as const;
 
 function parseArguments(argv: string[]) {
@@ -94,10 +98,12 @@ function printJob(job: Job): void {
 }
 
 function help(): void {
-  console.log(`Runi 0.1 — durable execution for coding agents
+  console.log(`Runi 0.2 — durable execution for coding agents
 
 Usage:
   runi start <task.md|task.json> [options]
+  runi start --guided "<job>" [options]
+  runi start --grill "<job>" [options]
   runi status [job-id] [--workdir <dir>]
   runi inspect <job-id> [--workdir <dir>]
   runi logs <job-id> [--workdir <dir>]
@@ -106,6 +112,8 @@ Usage:
   runi stop <job-id> [--workdir <dir>]
 
 Start options:
+  --guided                      Prompt for settings and create a reusable task
+  --grill                       AI-guided implementation choices and editable verification
   --agent <opencode|codex|claude|command>
                                  Worker adapter (default: opencode)
   --binary <path>                Coding-agent executable override
@@ -118,10 +126,29 @@ Start options:
 `);
 }
 
+async function guidedTask(goal: string, workingDirectory: string, grill: boolean): Promise<string> {
+  const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  const iterator = lines[Symbol.asyncIterator]();
+  try {
+    const path = await createGuidedTask(goal, workingDirectory, async (question) => {
+      process.stdout.write(question);
+      const answer = await iterator.next();
+      if (answer.done) throw new Error("Interactive input ended before the task was complete.");
+      return answer.value;
+    }, { grill });
+    console.log(`Saved reusable task to ${path}.`);
+    return path;
+  } finally {
+    lines.close();
+  }
+}
+
 async function start(args: ParsedArguments): Promise<number> {
-  const task = requirePositional(args, 1, "runi start <task.md|task.json>");
+  const taskOrGoal = requirePositional(args, 1, "runi start <task.md|task.json> | runi start --guided|--grill \"<job>\"");
   const workingDirectory = resolve(args.values.workdir ?? process.cwd());
   if (!existsSync(workingDirectory)) throw new Error(`Working directory does not exist: ${workingDirectory}`);
+  const guided = args.values.guided === true || args.values.grill === true;
+  const task = guided ? await guidedTask(taskOrGoal, workingDirectory, args.values.grill === true) : taskOrGoal;
   const maxAttemptsText = args.values["max-attempts"];
   const parsedAttempts = maxAttemptsText === undefined ? undefined : Number(maxAttemptsText);
   if (parsedAttempts !== undefined && (!Number.isInteger(parsedAttempts) || parsedAttempts < 1)) {

@@ -3,6 +3,7 @@
 ## Completion and recovery
 
 - A job without at least one independent verification command cannot complete.
+- An AI-suggested verification policy must be shown to the user and remain editable, removable, and extensible before any suggested command can execute.
 - Baseline verification records initial conditions; failure is allowed because fixing that failure may be the task.
 - A worker success can only advance the job to verification. Every required final check must pass before `complete` is persisted.
 - Attempt and wall-time budgets are host-enforced and remain cumulative across retries and process restarts.

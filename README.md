@@ -102,6 +102,22 @@ Then run it against the target repository:
 pnpm run start -- start task.json --workdir /path/to/repository
 ```
 
+Prefer prompts? Give Runi only the job. Guided mode asks for the worker, model, budgets, and verification policy, saves the resulting JSON under `<workdir>/.runi/tasks/`, and starts it through the same Supervisor:
+
+```bash
+runi start --guided "Add a /health endpoint and its tests" --workdir /path/to/repository
+```
+
+Choose `manual` to enter verification commands yourself or `ai` to ask the selected coding agent for suggestions. Every AI command is shown before execution: press Enter to keep it, type `-` to remove it, type a replacement to edit it, and add more commands at the end.
+
+For a short or ambiguous idea, grill mode asks the selected agent to propose concrete implementation alternatives before creating the task:
+
+```bash
+runi start --grill "Add durable caching" --workdir /path/to/repository
+```
+
+Answer each question with an option number or your own text. Runi persists the original job plus your decisions in the generated goal so the worker receives the intended implementation direction. AI guidance runs with read-only analysis settings; it remains untrusted advice, never completion evidence.
+
 A Markdown file can be used as the goal when the completion contract is supplied on the command line:
 
 ```bash

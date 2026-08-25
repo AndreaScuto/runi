@@ -14,6 +14,8 @@ Leo 🐕 becomes the product's supervision signal in this version. The CLI shoul
 
 Support OpenCode, Codex CLI, and Claude Code behind the same worker contract. Selection is explicit per job; agent support must not become automatic provider routing or weaken Runi's host-owned verification boundary.
 
+Preserve hand-written task files while adding guided task creation from a short job. Grill mode may use the explicitly selected agent to turn an underspecified idea into user-chosen implementation decisions and an editable verification proposal; both modes must persist a normal task and converge on the existing supervision contract.
+
 Ship a tested scoped npm package through GitHub Packages for stable releases so developers can install the CLI without cloning the repository.
 
 ## v0.3 — Structured intelligence

@@ -6,6 +6,8 @@ Runi is a host-side control plane around a replaceable coding worker. The host o
 
 Independent verification is the trust boundary. New adapters or execution modes must preserve host control instead of delegating lifecycle decisions to the model or provider.
 
+Guided and grill modes are task-authoring layers, not alternate runtimes. They must emit an ordinary reusable task definition and enter the same parser, Supervisor, budgets, and verification boundary as a hand-written task. AI-generated implementation choices and verification commands are untrusted suggestions produced with read-only agent settings; the user owns the final task and must be able to edit or remove every suggested verification command before it can run.
+
 ## Meaning of durability
 
 Durability means a fresh worker can continue from persisted task state, evidence, bounded prior context, and the current working tree. It does not mean restoring a model session, replaying every interaction, or rolling the repository back to a snapshot.
