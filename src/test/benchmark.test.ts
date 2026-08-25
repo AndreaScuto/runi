@@ -119,6 +119,7 @@ test("paired runner writes independently verified reusable artifacts", async (t)
   assert.equal(result.cases.length, 2);
   assert.ok(result.cases.every((entry) => entry.verified));
   assert.deepEqual(result.cases.map((entry) => entry.usage?.totalTokens), [14, 14]);
+  assert.ok(result.cases.every((entry) => entry.verification.some((check) => check.phase === "baseline") && entry.verification.some((check) => check.phase === "final")));
   assert.match(await readFile(join(output, "BENCHMARK_REPORT.md"), "utf8"), /OpenCode vs OpenCode \+ Runi benchmark/);
   assert.equal(JSON.parse(await readFile(join(output, "summary.json"), "utf8")).cases.length, 2);
 });

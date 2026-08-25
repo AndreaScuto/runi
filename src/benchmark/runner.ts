@@ -116,6 +116,7 @@ function benchmarkJob(
 
 function evidence(results: VerificationResult[]): VerificationEvidence[] {
   return results.map((result) => ({
+    phase: result.phase,
     command: result.command,
     exitCode: result.exitCode,
     timedOut: result.timedOut,

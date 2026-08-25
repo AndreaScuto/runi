@@ -12,6 +12,7 @@ export interface TokenUsage {
 }
 
 export interface VerificationEvidence {
+  phase: "baseline" | "final";
   command: string;
   exitCode: number | null;
   timedOut: boolean;

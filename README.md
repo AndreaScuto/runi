@@ -109,6 +109,8 @@ On every worker launch Runi records a checkpoint with job state and, where Git i
 
 Runi includes a paired benchmark harness for repeatable regression testing. It runs ten small deterministic coding tasks twice, each in a new disposable workspace:
 
+Latest published result: [10×2 benchmark with `opencode/mimo-v2.5-free`](benchmarks/reports/2026-08-25-mimo-v2.5-free.md) — both modes passed 10/10 hidden acceptance checks; this sample observed 9.1% fewer tokens and 11.4% less total time with Runi.
+
 - **OpenCode direct**: baseline check, one OpenCode operation, final hidden acceptance check.
 - **OpenCode + Runi**: the same prompt and model via the Runi supervisor, with the same baseline and final hidden acceptance check, retry budget and wall-time budget.
 
