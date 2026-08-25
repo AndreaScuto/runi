@@ -29,8 +29,8 @@ function requireGoal(value: unknown): string {
 
 function parseAgent(value: unknown): AgentKind {
   if (value === undefined) return "opencode";
-  if (value === "opencode" || value === "command") return value;
-  throw new Error("executor.kind must be `opencode` or `command`.");
+  if (value === "opencode" || value === "codex" || value === "claude" || value === "command") return value;
+  throw new Error("executor.kind must be `opencode`, `codex`, `claude`, or `command`.");
 }
 
 function parseVerification(value: unknown): VerificationCommand[] {

@@ -34,3 +34,13 @@ test("task parsing rejects a task without independent verification", async (t) =
   await writeFile(taskPath, JSON.stringify({ goal: "No proof", executor: { kind: "command", command: "echo work" } }));
   await assert.rejects(loadTaskDefinition(taskPath, { workingDirectory: root }), /requires at least one verification command/);
 });
+
+test("task parsing accepts each supported coding agent", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "runi-agents-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const taskPath = join(root, "task.json");
+  for (const kind of ["opencode", "codex", "claude"] as const) {
+    await writeFile(taskPath, JSON.stringify({ goal: "Work", executor: { kind }, verification: ["echo verify"] }));
+    assert.equal((await loadTaskDefinition(taskPath, { workingDirectory: root })).executor.kind, kind);
+  }
+});

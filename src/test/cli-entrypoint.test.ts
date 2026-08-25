@@ -10,6 +10,7 @@ test("compiled CLI executes when invoked directly", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Runi 0\.1/);
   assert.match(result.stdout, /runi start/);
+  assert.match(result.stdout, /opencode\|codex\|claude\|command/);
 });
 
 test("Leo visibly supervises a foreground job", () => {

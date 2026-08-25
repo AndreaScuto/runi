@@ -14,7 +14,9 @@ Recovery markers are audit and orientation points. They deliberately avoid a che
 
 ## Deliberate scope
 
-The first product boundary is local and single-worker. Multi-agent scheduling, remote control, provider-neutral orchestration, and reviewer hierarchies are separate product decisions, not implicit extensions of the current core.
+The first product boundary is local and single-worker. Worker execution is CLI-agent agnostic: OpenCode, Codex CLI, and Claude Code are manually selected replaceable workers behind the same contract. Multi-agent scheduling, remote control, automatic provider/model routing, and reviewer hierarchies remain separate product decisions.
+
+Adapters must use each CLI's non-interactive mode without bypassing its sandbox or permission system. A worker blocked by vendor policy fails normally and enters Runi recovery; adapter convenience must not expand host authority or weaken the verification boundary.
 
 Persistence favors an append-only evidence trail and non-destructive compatibility with existing local databases. Obsolete legacy tables may remain harmlessly; migrations must not erase a user's job history merely to make the schema tidy.
 

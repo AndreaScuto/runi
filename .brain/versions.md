@@ -12,6 +12,8 @@ Make recovery explainable and evidence-driven: classify failures, detect meaning
 
 Leo 🐕 becomes the product's supervision signal in this version. The CLI should make active supervision visible, while documentation introduces the mascot without assigning it architectural authority.
 
+Support OpenCode, Codex CLI, and Claude Code behind the same worker contract. Selection is explicit per job; agent support must not become automatic provider routing or weaken Runi's host-owned verification boundary.
+
 ## v0.3 — Structured intelligence
 
 Represent the work to perform, runtime knowledge, and evidence relationships through an Execution Graph and a logical Knowledge Layer. Reuse GitNexus for code intelligence instead of duplicating repository symbols, dependencies, or callers.

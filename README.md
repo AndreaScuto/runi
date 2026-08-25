@@ -19,7 +19,7 @@ Runi adds the control layer around an existing agent:
 - **Bounded execution** — wall-time and attempt budgets are enforced by the host.
 - **Recovery** — failed execution or verification becomes another persisted attempt.
 - **Auditability** — events and verification evidence live in local SQLite.
-- **Agent independence** — OpenCode is an adapter, not the runtime.
+- **Agent independence** — OpenCode, Codex CLI, and Claude Code are replaceable adapters, not the runtime.
 
 Runi is local-first, CLI-first, and intentionally single-worker today.
 
@@ -99,7 +99,24 @@ pnpm run start -- start task.md \
   --wall-time 2h
 ```
 
-OpenCode must be installed and authenticated for agent-backed jobs. Pin a model with `--opencode-model provider/model` when reproducibility matters.
+## Choose your coding agent
+
+The selected CLI must already be installed and authenticated. Runi uses the same lifecycle, budgets, recovery context, and independent verification for every adapter.
+
+| `--agent` | Worker CLI | Default executable |
+|-----------|------------|--------------------|
+| `opencode` | OpenCode | `opencode` |
+| `codex` | Codex CLI | `codex` |
+| `claude` | Claude Code | `claude` |
+
+```bash
+runi start task.json --agent codex --model <model-id>
+runi start task.json --agent claude --model <model-id>
+```
+
+Use `--binary <path>` for a non-standard installation. The older `--opencode-binary` and `--opencode-model` flags remain accepted for v0.1 compatibility. Agent selection is explicit per job; Runi does not silently switch provider or model.
+
+The adapters do not bypass vendor safety controls. Codex runs with a writable-workspace sandbox and no interactive approval prompts; Claude Code runs in `acceptEdits` mode. Project or user settings may restrict additional shell commands, while Runi's verification still runs independently.
 
 ## Operate a durable job
 
@@ -174,7 +191,7 @@ Reports include Markdown, JSON, CSV, raw worker logs, verification evidence, dur
 ## Project direction
 
 - **v0.1:** durable, verified, bounded single-worker supervisor.
-- **v0.2 (in development):** adaptive recovery — failure classification, progress detection, recovery strategy selection, fault-injection benchmarks, and Leo's supervision experience.
+- **v0.2 (in development):** adaptive recovery, agent-agnostic OpenCode/Codex/Claude execution, fault-injection benchmarks, and Leo's supervision experience.
 - Later versions may add structured execution knowledge, multiple workers, and provider-aware routing only after the simpler runtime proves its value.
 
 Not in the current core: web dashboard, cloud service, multi-agent scheduling, automatic provider switching, or repository rollback.

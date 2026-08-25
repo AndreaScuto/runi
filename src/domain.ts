@@ -19,7 +19,7 @@ export const TERMINAL_STATUSES = new Set<JobStatus>([
   "budget_exceeded",
 ]);
 
-export type AgentKind = "opencode" | "command";
+export type AgentKind = "opencode" | "codex" | "claude" | "command";
 
 export interface VerificationCommand {
   command: string;
@@ -36,9 +36,9 @@ export interface ExecutorConfig {
   kind: AgentKind;
   /** Required for the generic command adapter. */
   command?: string;
-  /** Optional path or command name of the OpenCode executable. */
+  /** Optional path or command name of the selected coding-agent executable. */
   binary?: string;
-  /** Explicit OpenCode model in provider/model form. */
+  /** Explicit model identifier understood by the selected coding agent. */
   model?: string;
   /** Pass OpenCode's non-interactive auto-approval flag. Use only in disposable workspaces. */
   autoApprove?: boolean;

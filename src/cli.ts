@@ -4,6 +4,8 @@ import { existsSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { ClaudeCodeAdapter } from "./adapters/claude.js";
+import { CodexAdapter } from "./adapters/codex.js";
 import { CommandAdapter } from "./adapters/command.js";
 import { OpenCodeAdapter } from "./adapters/opencode.js";
 import { formatDuration } from "./budget.js";
@@ -14,7 +16,9 @@ import { Supervisor } from "./supervisor.js";
 
 const CLI_OPTIONS = {
   agent: { type: "string" },
+  binary: { type: "string" },
   command: { type: "string" },
+  model: { type: "string" },
   "opencode-binary": { type: "string" },
   "opencode-model": { type: "string" },
   verify: { type: "string", multiple: true },
@@ -43,6 +47,8 @@ function databasePath(workingDirectory: string): string {
 function supervisor(store: RuniStore): Supervisor {
   return new Supervisor(store, new Map<string, AgentAdapter>([
     ["opencode", new OpenCodeAdapter()],
+    ["codex", new CodexAdapter()],
+    ["claude", new ClaudeCodeAdapter()],
     ["command", new CommandAdapter()],
   ]));
 }
@@ -100,10 +106,11 @@ Usage:
   runi stop <job-id> [--workdir <dir>]
 
 Start options:
-  --agent <opencode|command>     Worker adapter (default: opencode)
+  --agent <opencode|codex|claude|command>
+                                 Worker adapter (default: opencode)
+  --binary <path>                Coding-agent executable override
+  --model <id>                   Coding-agent model override
   --command <command>            Command for the generic command adapter
-  --opencode-binary <path>       OpenCode executable (default: opencode)
-  --opencode-model <provider/id> Explicit OpenCode model for this run
   --verify <command>             Required verification command; repeatable
   --max-attempts <n>             Hard attempt budget
   --wall-time <duration>         Hard wall-time budget (for example: 90m)
@@ -123,8 +130,8 @@ async function start(args: ParsedArguments): Promise<number> {
   const overrides: StartOverrides = { workingDirectory };
   const agent = args.values.agent;
   const command = args.values.command;
-  const binary = args.values["opencode-binary"];
-  const model = args.values["opencode-model"];
+  const binary = args.values.binary ?? args.values["opencode-binary"];
+  const model = args.values.model ?? args.values["opencode-model"];
   const verification = args.values.verify;
   const wallTime = args.values["wall-time"];
   if (agent !== undefined) overrides.agent = agent;
