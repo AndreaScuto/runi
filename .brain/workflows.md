@@ -10,3 +10,9 @@
 ## Maintain durable knowledge
 
 After a significant change, use `.agents/skills/second-brain-maintain/SKILL.md`. Edit the smallest relevant page, replace stale statements instead of appending history, and leave `.brain` untouched when code and GitNexus already tell the full story.
+
+## Publish a stable release
+
+- Set `package.json` to the exact release version before publishing the matching `v<version>` GitHub Release.
+- Run the full regression suite and inspect the package tarball before publishing the release.
+- A stable GitHub Release publishes `@andreascuto/runi` to GitHub Packages through the repository-scoped `GITHUB_TOKEN`; never store a registry token in the repository.

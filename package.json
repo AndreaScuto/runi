@@ -1,17 +1,28 @@
 {
-  "name": "runi",
+  "name": "@andreascuto/runi",
   "version": "0.1.0",
   "description": "Durable, verified execution for coding agents.",
   "type": "module",
+  "packageManager": "pnpm@11.19.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AndreaScuto/runi.git"
+  },
+  "homepage": "https://github.com/AndreaScuto/runi#readme",
+  "bugs": "https://github.com/AndreaScuto/runi/issues",
   "bin": {
     "runi": "./dist/cli.js",
     "runi-benchmark": "./dist/benchmark/cli.js"
   },
   "files": [
     "dist",
+    "!dist/test",
     "README.md",
     "LICENSE"
   ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "engines": {
     "node": ">=24.0.0"
   },
@@ -19,6 +30,7 @@
     "build": "tsc --project tsconfig.json",
     "test": "pnpm run build && node --test dist/test",
     "check": "pnpm run build && node --test dist/test",
+    "prepack": "pnpm run build",
     "start": "node dist/cli.js",
     "benchmark": "node dist/benchmark/cli.js"
   },

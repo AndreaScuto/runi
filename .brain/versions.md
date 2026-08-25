@@ -14,6 +14,8 @@ Leo 🐕 becomes the product's supervision signal in this version. The CLI shoul
 
 Support OpenCode, Codex CLI, and Claude Code behind the same worker contract. Selection is explicit per job; agent support must not become automatic provider routing or weaken Runi's host-owned verification boundary.
 
+Ship a tested scoped npm package through GitHub Packages for stable releases so developers can install the CLI without cloning the repository.
+
 ## v0.3 — Structured intelligence
 
 Represent the work to perform, runtime knowledge, and evidence relationships through an Execution Graph and a logical Knowledge Layer. Reuse GitNexus for code intelligence instead of duplicating repository symbols, dependencies, or callers.

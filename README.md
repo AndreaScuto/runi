@@ -23,6 +23,20 @@ Runi adds the control layer around an existing agent:
 
 Runi is local-first, CLI-first, and intentionally single-worker today.
 
+## Install from GitHub Packages
+
+Starting with the stable v0.2 release, GitHub Releases publish the scoped npm package `@andreascuto/runi` to GitHub Packages after the full test suite passes.
+
+GitHub requires authentication even when installing a public npm package:
+
+```bash
+npm login --scope=@andreascuto --auth-type=legacy --registry=https://npm.pkg.github.com
+npm install --global @andreascuto/runi
+runi help
+```
+
+Use a GitHub personal access token (classic) with `read:packages` as the password. Source archives remain attached automatically to each GitHub Release.
+
 ## Try it in two minutes
 
 You need Node.js 24 or newer and pnpm.
