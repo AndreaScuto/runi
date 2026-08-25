@@ -35,6 +35,29 @@ function candidate(record: JsonRecord): Omit<TokenUsage, "samples"> | undefined 
   };
 }
 
+function openCodeStep(value: unknown): Omit<TokenUsage, "samples"> | undefined {
+  if (!isRecord(value) || value.type !== "step_finish" || !isRecord(value.part) || !isRecord(value.part.tokens)) return undefined;
+  const tokens = value.part.tokens;
+  const cache = isRecord(tokens.cache) ? tokens.cache : undefined;
+  const inputTokens = numberAt(tokens, ["input"]);
+  const outputTokens = numberAt(tokens, ["output"]);
+  const reasoningTokens = numberAt(tokens, ["reasoning"]);
+  const cacheReadTokens = cache === undefined ? undefined : numberAt(cache, ["read"]);
+  const cacheWriteTokens = cache === undefined ? undefined : numberAt(cache, ["write"]);
+  const totalTokens = numberAt(tokens, ["total"]);
+  const costUsd = numberAt(value.part, ["cost"]);
+  if (totalTokens === undefined && costUsd === undefined) return undefined;
+  return {
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+    ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+    ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
+    ...(totalTokens === undefined ? {} : { totalTokens }),
+    ...(costUsd === undefined ? {} : { costUsd }),
+  };
+}
+
 function collect(value: unknown, candidates: Array<Omit<TokenUsage, "samples">>): void {
   if (Array.isArray(value)) {
     for (const entry of value) collect(entry, candidates);
@@ -51,28 +74,50 @@ function maximum(values: Array<number | undefined>): number | undefined {
   return known.length === 0 ? undefined : Math.max(...known);
 }
 
-/** Extracts cumulative token/cost metrics from OpenCode JSON-line output without assuming one event schema. */
+function sumValues(usages: Array<Omit<TokenUsage, "samples">>, field: keyof Omit<TokenUsage, "samples">): number | undefined {
+  const values = usages.map((usage) => usage[field]).filter((value): value is number => typeof value === "number");
+  return values.length === 0 ? undefined : values.reduce((total, value) => total + value, 0);
+}
+
+function summedUsage(usages: Array<Omit<TokenUsage, "samples">>, samples: number): TokenUsage {
+  const usage: TokenUsage = { samples };
+  for (const field of ["inputTokens", "outputTokens", "reasoningTokens", "cacheReadTokens", "cacheWriteTokens", "totalTokens", "costUsd"] as const) {
+    const value = sumValues(usages, field);
+    if (value !== undefined) usage[field] = value;
+  }
+  return usage;
+}
+
+/** Extracts token/cost metrics from OpenCode JSON-line output, including per-step native events. */
 export function usageFromOpenCodeOutput(output: string): TokenUsage | undefined {
+  const steps: Array<Omit<TokenUsage, "samples">> = [];
   const candidates: Array<Omit<TokenUsage, "samples">> = [];
   for (const line of output.split(/\r?\n/)) {
     try {
-      collect(JSON.parse(line) as unknown, candidates);
+      const parsed = JSON.parse(line) as unknown;
+      const step = openCodeStep(parsed);
+      if (step === undefined) collect(parsed, candidates);
+      else steps.push(step);
     } catch {
       // OpenCode can interleave human-readable lines with JSON events.
     }
   }
+  // OpenCode step_finish events are independent model calls, so billed tokens add up.
+  if (steps.length > 0) return summedUsage(steps, steps.length);
   if (candidates.length === 0) return undefined;
   const usage: TokenUsage = { samples: candidates.length };
   const inputTokens = maximum(candidates.map((item) => item.inputTokens));
   const outputTokens = maximum(candidates.map((item) => item.outputTokens));
   const reasoningTokens = maximum(candidates.map((item) => item.reasoningTokens));
   const cacheReadTokens = maximum(candidates.map((item) => item.cacheReadTokens));
+  const cacheWriteTokens = maximum(candidates.map((item) => item.cacheWriteTokens));
   const totalTokens = maximum(candidates.map((item) => item.totalTokens));
   const costUsd = maximum(candidates.map((item) => item.costUsd));
   if (inputTokens !== undefined) usage.inputTokens = inputTokens;
   if (outputTokens !== undefined) usage.outputTokens = outputTokens;
   if (reasoningTokens !== undefined) usage.reasoningTokens = reasoningTokens;
   if (cacheReadTokens !== undefined) usage.cacheReadTokens = cacheReadTokens;
+  if (cacheWriteTokens !== undefined) usage.cacheWriteTokens = cacheWriteTokens;
   if (totalTokens !== undefined) usage.totalTokens = totalTokens;
   if (costUsd !== undefined) usage.costUsd = costUsd;
   return usage;
@@ -90,12 +135,14 @@ export function sumAttemptUsage(usages: TokenUsage[]): TokenUsage | undefined {
   const outputTokens = sum("outputTokens");
   const reasoningTokens = sum("reasoningTokens");
   const cacheReadTokens = sum("cacheReadTokens");
+  const cacheWriteTokens = sum("cacheWriteTokens");
   const totalTokens = sum("totalTokens");
   const costUsd = sum("costUsd");
   if (inputTokens !== undefined) result.inputTokens = inputTokens;
   if (outputTokens !== undefined) result.outputTokens = outputTokens;
   if (reasoningTokens !== undefined) result.reasoningTokens = reasoningTokens;
   if (cacheReadTokens !== undefined) result.cacheReadTokens = cacheReadTokens;
+  if (cacheWriteTokens !== undefined) result.cacheWriteTokens = cacheWriteTokens;
   if (totalTokens !== undefined) result.totalTokens = totalTokens;
   if (costUsd !== undefined) result.costUsd = costUsd;
   return result;

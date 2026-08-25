@@ -5,6 +5,7 @@ export interface TokenUsage {
   outputTokens?: number;
   reasoningTokens?: number;
   cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   totalTokens?: number;
   costUsd?: number;
   samples: number;

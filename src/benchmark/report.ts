@@ -129,7 +129,7 @@ export async function writeBenchmarkArtifacts(result: BenchmarkResult, outputDir
   await writeFile(join(outputDirectory, "summary.json"), JSON.stringify(result, null, 2));
   await writeFile(join(outputDirectory, "BENCHMARK_REPORT.md"), markdownReport(result));
   const lines = [
-    ["scenario", "mode", "verified", "status", "duration_ms", "attempts", "retries", "total_tokens", "cost_usd", "job_id", "log_file"].join(","),
+    ["scenario", "mode", "verified", "status", "duration_ms", "attempts", "retries", "input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens", "cache_write_tokens", "total_tokens", "cost_usd", "job_id", "log_file"].join(","),
     ...result.cases.map((entry) => [
       entry.scenarioId,
       entry.mode,
@@ -138,6 +138,11 @@ export async function writeBenchmarkArtifacts(result: BenchmarkResult, outputDir
       entry.durationMs,
       entry.attempts,
       entry.retries,
+      entry.usage?.inputTokens,
+      entry.usage?.outputTokens,
+      entry.usage?.reasoningTokens,
+      entry.usage?.cacheReadTokens,
+      entry.usage?.cacheWriteTokens,
       entry.usage?.totalTokens,
       entry.usage?.costUsd,
       entry.jobId,

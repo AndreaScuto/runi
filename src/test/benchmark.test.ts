@@ -54,6 +54,23 @@ test("usage extraction keeps cumulative OpenCode values and sums independent att
   assert.deepEqual(sumAttemptUsage([first!, second!]), { inputTokens: 27, outputTokens: 11, totalTokens: 38, costUsd: 0.025, samples: 3 });
 });
 
+test("usage extraction sums OpenCode step-finish calls and cache telemetry", () => {
+  const output = [
+    '{"type":"step_finish","part":{"tokens":{"total":100,"input":70,"output":10,"reasoning":0,"cache":{"read":20,"write":0}},"cost":0}}',
+    '{"type":"step_finish","part":{"tokens":{"total":120,"input":15,"output":5,"reasoning":0,"cache":{"read":100,"write":0}},"cost":0}}',
+  ].join("\n");
+  assert.deepEqual(usageFromOpenCodeOutput(output), {
+    inputTokens: 85,
+    outputTokens: 15,
+    reasoningTokens: 0,
+    cacheReadTokens: 120,
+    cacheWriteTokens: 0,
+    totalTokens: 220,
+    costUsd: 0,
+    samples: 2,
+  });
+});
+
 test("report renders observed token savings and does not turn unavailable telemetry into zero", () => {
   const result: BenchmarkResult = {
     schemaVersion: 1,
