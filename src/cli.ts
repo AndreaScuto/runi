@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { CommandAdapter } from "./adapters/command.js";
 import { OpenCodeAdapter } from "./adapters/opencode.js";
 import { formatDuration } from "./budget.js";
@@ -264,7 +264,18 @@ export async function run(argv: string[]): Promise<number> {
   throw new Error(`Unknown command: ${command}`);
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+function isDirectExecution(): boolean {
+  if (process.argv[1] === undefined) return false;
+  try {
+    // Package managers can invoke the bin through a symlink. Compare canonical paths,
+    // rather than URL strings, so the installed CLI behaves like the workspace copy.
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(resolve(process.argv[1]));
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectExecution()) {
   run(process.argv.slice(2)).then(
     (code) => { process.exitCode = code; },
     (error: unknown) => {
