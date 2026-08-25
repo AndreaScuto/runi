@@ -116,6 +116,46 @@ test("supervisor refuses completion when a persisted job has no completion contr
   assert.match(result.exitReason ?? "", /Completion contract/);
 });
 
+test("a failed final verifier can never produce complete", async (t) => {
+  const { root, store, job } = await fixture();
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  const timestamp = now();
+  const rejected: Job = {
+    ...job,
+    id: "rn_rejected",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    definition: {
+      ...job.definition,
+      verification: [{ command: `"${process.execPath}" -e "process.exit(1)"`, label: "always fails" }],
+      budget: { maxAttempts: 2, wallTimeMs: 60_000 },
+    },
+  };
+  store.createJob(rejected);
+  const result = await new Supervisor(store, new Map([["command", new ScriptedAdapter([0, 0])]])).run(rejected.id);
+  assert.equal(result.status, "budget_exceeded");
+  assert.ok(store.getVerificationResults(rejected.id).some((entry) => entry.phase === "final" && entry.exitCode !== 0));
+  assert.ok(store.getEvents(rejected.id).some((entry) => entry.type === "VERIFICATION_FAILED"));
+});
+
+test("wall-time budget interrupts verification and exhausts the job", async (t) => {
+  const { root, store, job } = await fixture();
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  const timestamp = now();
+  const timedOut: Job = {
+    ...job,
+    id: "rn_timeout",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    definition: { ...job.definition, budget: { maxAttempts: 2, wallTimeMs: 1 } },
+  };
+  store.createJob(timedOut);
+  const result = await new Supervisor(store, new Map([["command", new ScriptedAdapter([0])]])).run(timedOut.id);
+  assert.equal(result.status, "budget_exceeded");
+  const baseline = store.getVerificationResults(timedOut.id).find((entry) => entry.phase === "baseline");
+  assert.equal(baseline?.timedOut, true);
+});
+
 test("a persisted working job survives database reopen and resumes with a new worker session", async (t) => {
   const { root, store, job } = await fixture();
   let restarted: RuniStore | undefined;
