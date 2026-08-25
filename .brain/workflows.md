@@ -13,6 +13,7 @@ After a significant change, use `.agents/skills/second-brain-maintain/SKILL.md`.
 
 ## Publish a stable release
 
+- Never create a pull request targeting `main`, or merge v0.2 or later into `main`, without an explicit user request in the current task. Keep ordinary development on its active branch.
 - Set `package.json` to the exact release version before publishing the matching `v<version>` GitHub Release.
 - Run the full regression suite and inspect the package tarball before publishing the release.
 - A stable GitHub Release publishes `@andreascuto/runi` to GitHub Packages through the repository-scoped `GITHUB_TOKEN`; never store a registry token in the repository.

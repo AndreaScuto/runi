@@ -5,4 +5,4 @@
 - Existing databases may contain tables from the earlier checkpoint/worker-record design. They are tolerated for compatibility; destructive cleanup is deferred until there is a real migration need and a tested upgrade path.
 - Independent reviewers, usage/cost budgets, multi-agent scheduling, remote execution, and a web control plane are absent capabilities, not commitments.
 - The existing live paired benchmark demonstrates independently verified correctness parity for its sample. Because it did not exercise retries or injected failures, it is not evidence for recovery effectiveness; use fault injection or repeated counterbalanced runs for that claim.
-- The v0.2 licensing model is unresolved after the decision to require royalties for commercial use. Do not publish a v0.2 package or release while its manifest and license still grant Apache-2.0 rights; settle and review the replacement license first.
+- Runi v0.2 and later are AGPL-3.0-only so modified versions conveyed to others or offered through a network remain available under the same copyleft terms. The published v0.1 release remains Apache-2.0; its existing grant cannot be withdrawn.

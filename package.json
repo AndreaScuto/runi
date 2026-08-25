@@ -1,6 +1,6 @@
 {
   "name": "@andreascuto/runi",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Durable, verified execution for coding agents.",
   "type": "module",
   "packageManager": "pnpm@11.19.0",
@@ -28,8 +28,8 @@
   },
   "scripts": {
     "build": "tsc --project tsconfig.json",
-    "test": "pnpm run build && node --test dist/test",
-    "check": "pnpm run build && node --test dist/test",
+    "test": "pnpm run build && node --test dist/test/*.test.js",
+    "check": "pnpm run build && node --test dist/test/*.test.js",
     "prepack": "pnpm run build",
     "start": "node dist/cli.js",
     "benchmark": "node dist/benchmark/cli.js"
@@ -38,5 +38,5 @@
     "@types/node": "^24.0.0",
     "typescript": "^5.9.0"
   },
-  "license": "Apache-2.0"
+  "license": "AGPL-3.0-only"
 }

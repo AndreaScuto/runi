@@ -223,4 +223,6 @@ Runi uses TypeScript, Node.js, built-in `node:sqlite`, and the Node test runner.
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+Runi v0.2 and later are licensed under `AGPL-3.0-only`. If you distribute a modified version, or let users interact with one over a network, you must offer its corresponding source under the same license. See [LICENSE](LICENSE).
+
+The published v0.1.0 release remains available under Apache-2.0; rights already granted for that release are unchanged.

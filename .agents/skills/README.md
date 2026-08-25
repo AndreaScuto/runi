@@ -51,4 +51,4 @@ task -> relevant .brain page -> GitNexus -> minimum code -> impact -> change + t
 
 ## License
 
-Apache-2.0.
+AGPL-3.0-only as part of Runi v0.2 and later. Previously published copies retain their original license.
