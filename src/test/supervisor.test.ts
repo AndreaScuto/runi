@@ -12,11 +12,12 @@ class ScriptedAdapter implements AgentAdapter {
   readonly kind = "command" as const;
   starts = 0;
   resumes = 0;
-  constructor(private readonly exitCodes: number[]) {}
+  constructor(private readonly outcomes: Array<number | { exitCode: number; output: string }>) {}
 
   async start(): Promise<WorkerSession> {
     this.starts += 1;
-    return this.session(this.exitCodes.shift() ?? 0);
+    const outcome = this.outcomes.shift() ?? 0;
+    return this.session(typeof outcome === "number" ? { exitCode: outcome, output: outcome === 0 ? "done" : "temporary failure" } : outcome);
   }
 
   async resume(): Promise<WorkerSession> {
@@ -24,13 +25,13 @@ class ScriptedAdapter implements AgentAdapter {
     return this.start();
   }
 
-  private session(exitCode: number): WorkerSession {
+  private session(outcome: { exitCode: number; output: string }): WorkerSession {
     return {
       metadata: { test: true },
       async *events(): AsyncIterable<AgentEvent> {
         yield { type: "status", message: "scripted worker", createdAt: now() };
       },
-      result: Promise.resolve({ exitCode, signal: null, output: exitCode === 0 ? "done" : "temporary failure" }),
+      result: Promise.resolve({ exitCode: outcome.exitCode, signal: null, output: outcome.output }),
       async stop(): Promise<void> {},
     };
   }
@@ -81,6 +82,16 @@ test("supervisor retries a failed worker and records recovery", async (t) => {
   assert.ok(store.getEvents(job.id).some((entry) => entry.type === "RECOVERY_SCHEDULED"));
 });
 
+test("supervisor identifies rate limits as transient failures before retrying", async (t) => {
+  const { root, store, job } = await fixture();
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  const adapter = new ScriptedAdapter([{ exitCode: 1, output: "HTTP 429 rate limit" }, 0]);
+  const result = await new Supervisor(store, new Map([["command", adapter]])).run(job.id);
+  assert.equal(result.status, "complete");
+  const failure = store.getEvents(job.id).find((entry) => entry.type === "WORKER_FAILED");
+  assert.equal(failure?.payload.failureType, "transient");
+});
+
 test("supervisor stops an obvious repeated failure loop before exhausting attempts", async (t) => {
   const { root, store, job } = await fixture();
   t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
@@ -105,15 +116,33 @@ test("supervisor refuses completion when a persisted job has no completion contr
   assert.match(result.exitReason ?? "", /Completion contract/);
 });
 
-test("a persisted working job resumes with a new worker session", async (t) => {
+test("a persisted working job survives database reopen and resumes with a new worker session", async (t) => {
+  const { root, store, job } = await fixture();
+  let restarted: RuniStore | undefined;
+  t.after(async () => { restarted?.close(); await rm(root, { recursive: true, force: true }); });
+  store.transitionJob(job.id, "planning", "TEST_PLANNING");
+  store.transitionJob(job.id, "working", "TEST_WORKING");
+  store.incrementAttempts(job.id);
+  store.close();
+  restarted = new RuniStore(join(root, ".runi", "runi.db"));
+  assert.equal(restarted.requireJob(job.id).status, "working");
+  assert.equal(restarted.requireJob(job.id).attempts, 1);
+  const adapter = new ScriptedAdapter([0]);
+  const result = await new Supervisor(restarted, new Map([["command", adapter]])).run(job.id);
+  assert.equal(result.status, "complete");
+  assert.equal(adapter.resumes, 1);
+  assert.equal(result.attempts, 2);
+});
+
+test("pause and resume preserve the lifecycle state to continue", async (t) => {
   const { root, store, job } = await fixture();
   t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
   store.transitionJob(job.id, "planning", "TEST_PLANNING");
   store.transitionJob(job.id, "working", "TEST_WORKING");
-  store.incrementAttempts(job.id);
-  const adapter = new ScriptedAdapter([0]);
-  const result = await new Supervisor(store, new Map([["command", adapter]])).run(job.id);
-  assert.equal(result.status, "complete");
-  assert.equal(adapter.resumes, 1);
-  assert.equal(result.attempts, 2);
+  const paused = store.pauseJob(job.id);
+  assert.equal(paused.status, "paused");
+  assert.equal(paused.resumeStatus, "working");
+  const resumed = store.resumeJob(job.id);
+  assert.equal(resumed.status, "working");
+  assert.equal(resumed.resumeStatus, undefined);
 });
