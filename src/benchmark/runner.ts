@@ -1,8 +1,8 @@
-import { spawn } from "node:child_process";
+import { execFile, type ExecFileException } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
+import { promisify } from "node:util";
 import { OpenCodeAdapter, needsWindowsShell, openCodeInvocation } from "../adapters/opencode.js";
 import type { Job, JobEvent, VerificationCommand, VerificationResult } from "../domain.js";
 import { now } from "../domain.js";
@@ -15,6 +15,7 @@ import type { BenchmarkCaseResult, BenchmarkConfiguration, BenchmarkResult, Toke
 import { sumAttemptUsage, usageFromOpenCodeOutput } from "./usage.js";
 
 const MAX_CAPTURED_OUTPUT = 1_000_000;
+const execFileAsync = promisify(execFile);
 
 export interface RunBenchmarkOptions {
   outputDirectory: string;
@@ -25,51 +26,32 @@ export interface RunBenchmarkOptions {
   wallTimeMs?: number;
 }
 
-interface ProcessResult {
-  exitCode: number | null;
-  timedOut: boolean;
-  output: string;
-}
+type ProcessError = ExecFileException & { stdout?: string; stderr?: string };
 
 function quote(value: string): string {
   return `"${value.replaceAll('"', '\\"')}"`;
 }
 
-function cappedAppend(chunks: string[], value: string): void {
-  const currentLength = chunks.reduce((total, chunk) => total + chunk.length, 0);
-  if (currentLength < MAX_CAPTURED_OUTPUT) chunks.push(value.slice(0, MAX_CAPTURED_OUTPUT - currentLength));
-}
-
-async function runProcess(command: string, args: string[], cwd: string, timeoutMs: number): Promise<ProcessResult> {
-  const output: string[] = [];
-  return new Promise((resolveResult) => {
-    let settled = false;
-    let timedOut = false;
-    let timer: NodeJS.Timeout | undefined;
-    const child = spawn(command, args, {
+async function runProcess(command: string, args: string[], cwd: string, timeoutMs: number) {
+  const windowsShim = needsWindowsShell(command);
+  try {
+    const result = await execFileAsync(windowsShim ? process.env.ComSpec ?? "cmd.exe" : command, windowsShim ? ["/d", "/s", "/c", command, ...args] : args, {
       cwd,
-      shell: needsWindowsShell(command),
+      timeout: timeoutMs,
+      maxBuffer: 10_000_000,
       windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
     });
-    const finish = (exitCode: number | null): void => {
-      if (settled) return;
-      settled = true;
-      if (timer !== undefined) clearTimeout(timer);
-      resolveResult({ exitCode, timedOut, output: output.join("").trim() });
+    return { exitCode: 0, timedOut: false, output: `${result.stdout}${result.stderr}`.slice(0, MAX_CAPTURED_OUTPUT).trim() };
+  } catch (error) {
+    const failure = error as ProcessError;
+    const output = `${failure.stdout ?? ""}${failure.stderr ?? ""}` || failure.message;
+    return {
+      exitCode: typeof failure.code === "number" ? failure.code : null,
+      timedOut: failure.killed === true,
+      output: output.slice(0, MAX_CAPTURED_OUTPUT).trim(),
     };
-    child.stdout?.on("data", (chunk: Buffer) => cappedAppend(output, chunk.toString()));
-    child.stderr?.on("data", (chunk: Buffer) => cappedAppend(output, chunk.toString()));
-    child.once("error", (error) => {
-      cappedAppend(output, `${error.message}\n`);
-      finish(-1);
-    });
-    child.once("close", (exitCode) => finish(exitCode));
-    timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-    }, timeoutMs);
-  });
+  }
 }
 
 function taskPath(workspace: string): string {
@@ -333,5 +315,5 @@ export async function runBenchmark(options: RunBenchmarkOptions): Promise<Benchm
 
 export function defaultBenchmarkOutputDirectory(): string {
   const stamp = new Date().toISOString().replaceAll(/[:.]/g, "-");
-  return join(process.cwd(), "benchmarks", "runs", `${stamp}-${basename(fileURLToPath(import.meta.url)).replace(/\W/g, "")}`);
+  return join(process.cwd(), "benchmarks", "runs", stamp);
 }

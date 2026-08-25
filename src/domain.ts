@@ -1,10 +1,8 @@
 export const JOB_STATUSES = [
   "created",
-  "planning",
   "working",
   "verifying",
   "repairing",
-  "reviewing",
   "complete",
   "paused",
   "failed",
@@ -77,16 +75,6 @@ export interface JobEvent {
   createdAt: string;
 }
 
-export interface Checkpoint {
-  id: number;
-  jobId: string;
-  reason: string;
-  snapshot: Record<string, unknown>;
-  gitSha?: string;
-  gitDiff?: string;
-  createdAt: string;
-}
-
 export interface VerificationResult {
   id?: number;
   jobId: string;
@@ -98,18 +86,6 @@ export interface VerificationResult {
   output: string;
   startedAt: string;
   completedAt: string;
-}
-
-export interface WorkerRecord {
-  id: number;
-  jobId: string;
-  kind: AgentKind;
-  pid?: number;
-  status: "running" | "completed" | "failed" | "stopped";
-  metadata: Record<string, unknown>;
-  startedAt: string;
-  completedAt?: string;
-  exitCode?: number | null;
 }
 
 export interface AgentEvent {
@@ -127,7 +103,6 @@ export interface WorkerResult {
 
 export interface WorkerSession {
   pid?: number;
-  metadata: Record<string, unknown>;
   events(): AsyncIterable<AgentEvent>;
   result: Promise<WorkerResult>;
   stop(): Promise<void>;
@@ -136,7 +111,6 @@ export interface WorkerSession {
 export interface AgentAdapter {
   readonly kind: AgentKind;
   start(job: Job, context: string): Promise<WorkerSession>;
-  resume(job: Job, context: string): Promise<WorkerSession>;
 }
 
 export const now = (): string => new Date().toISOString();

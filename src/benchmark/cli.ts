@@ -2,32 +2,23 @@ import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { parseDuration } from "../budget.js";
 import { writeBenchmarkArtifacts } from "./report.js";
 import { defaultBenchmarkOutputDirectory, runBenchmark } from "./runner.js";
 import type { BenchmarkResult } from "./types.js";
 
-interface Arguments {
-  positionals: string[];
-  options: Map<string, string>;
-}
+const CLI_OPTIONS = {
+  opencode: { type: "string" },
+  model: { type: "string" },
+  count: { type: "string" },
+  "max-attempts": { type: "string" },
+  "wall-time": { type: "string" },
+  output: { type: "string" },
+} as const;
 
-function parseArguments(argv: string[]): Arguments {
-  const positionals: string[] = [];
-  const options = new Map<string, string>();
-  for (let index = 0; index < argv.length; index += 1) {
-    const value = argv[index]!;
-    if (!value.startsWith("--")) {
-      positionals.push(value);
-      continue;
-    }
-    const [name, inline] = value.slice(2).split("=", 2);
-    const next = inline ?? argv[index + 1];
-    if (!name || next === undefined || next.startsWith("--")) throw new Error(`Option --${name ?? "?"} requires a value.`);
-    options.set(name, next);
-    if (inline === undefined) index += 1;
-  }
-  return { positionals, options };
+function parseArguments(argv: string[]) {
+  return parseArgs({ args: argv, allowPositionals: true, options: CLI_OPTIONS });
 }
 
 function help(): void {
@@ -73,14 +64,14 @@ export async function run(argv: string[]): Promise<number> {
     return 0;
   }
   if (command !== "run") throw new Error(`Unknown command: ${command}`);
-  const count = integer(args.options.get("count"), "--count");
-  const maxAttempts = integer(args.options.get("max-attempts"), "--max-attempts");
-  const wallTime = args.options.get("wall-time");
-  const outputDirectory = resolve(args.options.get("output") ?? defaultBenchmarkOutputDirectory());
+  const count = integer(args.values.count, "--count");
+  const maxAttempts = integer(args.values["max-attempts"], "--max-attempts");
+  const wallTime = args.values["wall-time"];
+  const outputDirectory = resolve(args.values.output ?? defaultBenchmarkOutputDirectory());
   const result = await runBenchmark({
     outputDirectory,
-    opencodeBinary: args.options.get("opencode") ?? "opencode",
-    ...(args.options.get("model") === undefined ? {} : { model: args.options.get("model")! }),
+    opencodeBinary: args.values.opencode ?? "opencode",
+    ...(args.values.model === undefined ? {} : { model: args.values.model }),
     ...(count === undefined ? {} : { scenarioCount: count }),
     ...(maxAttempts === undefined ? {} : { maxAttempts }),
     ...(wallTime === undefined ? {} : { wallTimeMs: parseDuration(wallTime) }),

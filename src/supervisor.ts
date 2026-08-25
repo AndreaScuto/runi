@@ -1,13 +1,9 @@
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { checkBudget } from "./budget.js";
 import type { AgentAdapter, AgentEvent, Job, WorkerResult, WorkerSession } from "./domain.js";
 import { isTerminal } from "./state-machine.js";
 import type { RuniStore } from "./storage.js";
 import { describeVerificationFailure, runVerification, verificationPassed } from "./verify.js";
-
-const execFileAsync = promisify(execFile);
 
 export class Supervisor {
   constructor(
@@ -25,7 +21,7 @@ export class Supervisor {
     }
 
     if (job.status === "created") {
-      job = this.store.transitionJob(job.id, "planning", "JOB_PLANNING_STARTED");
+      job = this.store.transitionJob(job.id, "working", "JOB_WORK_STARTED");
     }
     if (!job.baselineAt) {
       const baseline = await runVerification(this.store, job, "baseline");
@@ -39,8 +35,6 @@ export class Supervisor {
       }
       if (job.status === "paused" || isTerminal(job.status)) return job;
     }
-    if (job.status === "planning") job = this.store.transitionJob(job.id, "working", "JOB_WORK_STARTED");
-
     while (!isTerminal(job.status) && job.status !== "paused") {
       if (job.status === "working") {
         await this.runWorker(job);
@@ -50,13 +44,9 @@ export class Supervisor {
         const budget = this.launchBudget(job);
         if (budget) this.exhaust(job, budget);
         else {
-          await this.checkpoint(job, "before-repair");
+          this.store.appendEvent(job.id, "CHECKPOINT_CREATED", { reason: "before-repair", status: job.status, attempts: job.attempts });
           this.store.transitionJob(job.id, "working", "REPAIR_STARTED");
         }
-      } else if (job.status === "reviewing") {
-        this.store.transitionJob(job.id, "complete", "JOB_COMPLETED", { evidence: "verification commands passed" });
-      } else if (job.status === "planning") {
-        this.store.transitionJob(job.id, "working", "JOB_WORK_STARTED");
       }
       job = this.store.requireJob(job.id);
     }
@@ -69,29 +59,29 @@ export class Supervisor {
       this.exhaust(job, budgetReason);
       return;
     }
-    await this.checkpoint(job, job.attempts > 0 ? "before-resume" : "before-worker");
+    this.store.appendEvent(job.id, "CHECKPOINT_CREATED", {
+      reason: job.attempts > 0 ? "before-resume" : "before-worker",
+      status: job.status,
+      attempts: job.attempts,
+    });
     const attempted = this.store.incrementAttempts(job.id);
     const adapter = this.adapters.get(attempted.definition.executor.kind);
     if (!adapter) {
       this.fail(attempted, `No adapter registered for ${attempted.definition.executor.kind}.`);
       return;
     }
-    const context = this.recoveryContext(attempted);
+    const context = [
+      this.recoveryContext(attempted),
+      attempted.attempts > 1 ? "This is a resumed durable job. Inspect the current repository before changing it." : "",
+    ].filter(Boolean).join("\n\n");
     let session: WorkerSession;
     try {
-      session = attempted.attempts > 1
-        ? await adapter.resume(attempted, context)
-        : await adapter.start(attempted, context);
+      session = await adapter.start(attempted, context);
     } catch (error) {
       await this.handleWorkerFailure(attempted, { exitCode: -1, signal: null, output: this.errorMessage(error) });
       return;
     }
-    const worker = this.store.createWorker({
-      jobId: attempted.id,
-      kind: adapter.kind,
-      ...(session.pid === undefined ? {} : { pid: session.pid }),
-      metadata: session.metadata,
-    });
+    this.store.appendEvent(attempted.id, "WORKER_STARTED", { kind: adapter.kind, pid: session.pid ?? null });
     const monitor = this.monitorWorker(attempted.id, session);
     try {
       for await (const entry of session.events()) this.recordAgentEvent(attempted.id, entry);
@@ -99,7 +89,7 @@ export class Supervisor {
       clearInterval(monitor);
       const current = this.store.requireJob(attempted.id);
       const workerStatus = result.exitCode === 0 ? "completed" : current.status === "paused" || current.status === "cancelled" ? "stopped" : "failed";
-      this.store.finishWorker(worker.id, workerStatus, result.exitCode);
+      this.store.appendEvent(current.id, "WORKER_FINISHED", { status: workerStatus, exitCode: result.exitCode });
       if (current.status === "paused" || current.status === "cancelled" || isTerminal(current.status)) return;
       const currentBudget = checkBudget(current);
       if (currentBudget.exceeded) {
@@ -124,7 +114,7 @@ export class Supervisor {
       return;
     }
     if (verificationPassed(checks)) {
-      this.store.transitionJob(current.id, "reviewing", "VERIFICATION_PASSED", { checks: checks.length });
+      this.store.transitionJob(current.id, "complete", "JOB_COMPLETED", { checks: checks.length, evidence: "verification commands passed" });
       return;
     }
     const reason = describeVerificationFailure(checks);
@@ -139,8 +129,7 @@ export class Supervisor {
 
   private async recover(job: Job, detail: string, source: "worker" | "verification"): Promise<void> {
     const fingerprint = createHash("sha256").update(`${source}:${detail.replace(/\d+/g, "#")}`).digest("hex").slice(0, 16);
-    const failureType = this.classifyFailure(detail);
-    this.store.appendEvent(job.id, "WORKER_FAILED", { source, failureType, fingerprint, detail: detail.slice(-8_000) });
+    this.store.appendEvent(job.id, "WORKER_FAILED", { source, fingerprint, detail: detail.slice(-8_000) });
     const current = this.store.requireJob(job.id);
     if (current.attempts >= current.definition.budget.maxAttempts) {
       this.exhaust(current, `Maximum attempts reached (${current.definition.budget.maxAttempts})`);
@@ -151,7 +140,7 @@ export class Supervisor {
       this.fail(current, `Stagnation detected: the same ${source} failure occurred ${repeated} times.`);
       return;
     }
-    this.store.transitionJob(current.id, "repairing", "RECOVERY_SCHEDULED", { source, failureType, fingerprint, repeated });
+    this.store.transitionJob(current.id, "repairing", "RECOVERY_SCHEDULED", { source, fingerprint, repeated });
   }
 
   private launchBudget(job: Job): string | undefined {
@@ -188,38 +177,6 @@ export class Supervisor {
     }, 500);
   }
 
-  private async checkpoint(job: Job, reason: string): Promise<void> {
-    const git = await this.gitSnapshot(job.definition.workingDirectory);
-    this.store.createCheckpoint({
-      jobId: job.id,
-      reason,
-      snapshot: {
-        status: job.status,
-        attempts: job.attempts,
-        budget: job.definition.budget,
-        taskPath: job.definition.taskPath,
-      },
-      ...(git.sha === undefined ? {} : { gitSha: git.sha }),
-      ...(git.diff === undefined ? {} : { gitDiff: git.diff }),
-    });
-  }
-
-  private async gitSnapshot(cwd: string): Promise<{ sha?: string; diff?: string }> {
-    try {
-      const [revision, diff] = await Promise.all([
-        execFileAsync("git", ["rev-parse", "HEAD"], { cwd, windowsHide: true, maxBuffer: 8_000 }),
-        execFileAsync("git", ["diff", "--binary", "--no-ext-diff"], { cwd, windowsHide: true, maxBuffer: 200_000 }),
-      ]);
-      const sha = revision.stdout.trim();
-      return {
-        ...(sha ? { sha } : {}),
-        ...(diff.stdout ? { diff: diff.stdout.slice(0, 200_000) } : {}),
-      };
-    } catch {
-      return {};
-    }
-  }
-
   private recoveryContext(job: Job): string {
     const events = this.store.getEvents(job.id, 12)
       .filter((entry) => entry.type === "WORKER_FAILED" || entry.type === "VERIFICATION_FAILED")
@@ -238,10 +195,4 @@ export class Supervisor {
     return error instanceof Error ? error.stack ?? error.message : String(error);
   }
 
-  private classifyFailure(detail: string): "transient" | "execution" | "policy" {
-    const normalized = detail.toLowerCase();
-    if (/\b(429|rate limit|timeout|timed out|econnreset|enetunreach|enotfound|network)\b/.test(normalized)) return "transient";
-    if (/\b(permission denied|forbidden|budget exceeded)\b/.test(normalized)) return "policy";
-    return "execution";
-  }
 }

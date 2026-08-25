@@ -2,45 +2,64 @@
 
 **Durable, verified execution for coding agents.**
 
-Runi supervises a coding agent as a replaceable worker. It owns the job state, retry budget, checkpoints and proof of completion, so a job can be resumed after the terminal, agent process or Runi process stops.
+Launch a coding job, let your agent work, and come back later. Runi keeps the job state, budgets, recovery history, and proof of completion outside the agent session.
 
 > The agent can die. The job doesn't.
 
-## What v0.1 does
+## Why Runi?
 
-- Persists jobs, worker attempts, checkpoints, verification runs and append-only events in local SQLite.
-- Enforces a host-side wall-time and attempt budget.
-- Uses an explicit state machine: `created → planning → working → verifying → reviewing → complete`.
-- Treats agent completion as a proposal: only configured commands can produce successful completion evidence.
-- Retries failed execution or verification, detects repeated failures, and can pause, resume or stop a job.
-- Includes an OpenCode adapter and a generic command adapter for deterministic local integration.
+Coding agents run in sessions. Real engineering work is a job that may outlive a terminal, a provider connection, or one model context.
 
-Runi is CLI-first, local-first and intentionally single-worker in v0.1. It does not yet offer multi-agent routing, cloud execution or a web dashboard.
+Runi adds the control layer around an existing agent:
 
-## Requirements
+- **Durable jobs** — state survives Runi and worker process restarts.
+- **Verified completion** — a worker cannot declare its own success; required commands must pass.
+- **Bounded execution** — wall-time and attempt budgets are enforced by the host.
+- **Recovery** — failed execution or verification becomes another persisted attempt.
+- **Auditability** — events and verification evidence live in local SQLite.
+- **Agent independence** — OpenCode is an adapter, not the runtime.
 
-- Node.js 24 or newer (Runi uses the built-in `node:sqlite` module)
-- An OpenCode executable in `PATH` to use the default adapter, or any shell command for the command adapter
+Runi is local-first, CLI-first, and intentionally single-worker today.
 
-## Install and build
+## Try it in two minutes
+
+You need Node.js 24 or newer and pnpm.
 
 ```bash
 pnpm install
-pnpm run build
-pnpm test
+pnpm run check
+pnpm run start -- start examples/command-task.json
 ```
 
-For local development:
+The example completes only after the configured verification succeeds:
 
-```bash
-pnpm run start -- help
+```text
+JOB rn_7c16257b199e401a
+State       COMPLETE
+Attempts    1 / 2
 ```
 
-After installing the package globally, the same commands are available as `runi`.
+The example uses a deterministic command worker, so it does not require an AI provider or consume model tokens.
 
-## Create a task
+## How it works
 
-A Markdown file is accepted as a goal. Use JSON when you want the task's executor, verification contract and budgets to travel with the task:
+```text
+Task + completion contract
+          ↓
+   Runi Supervisor  ← budgets, events, recovery
+          ↓
+  replaceable worker
+          ↓
+ independent verification
+          ↓
+     COMPLETE only with evidence
+```
+
+A worker exit code of zero means only “ready to verify.” Runi persists `complete` only after every required final command passes.
+
+## Define a job
+
+JSON keeps the goal, executor, verification contract, and budgets together:
 
 ```json
 {
@@ -49,7 +68,7 @@ A Markdown file is accepted as a goal. Use JSON when you want the task's executo
     "kind": "opencode"
   },
   "verification": [
-    { "label": "unit tests", "command": "pnpm test" },
+    { "label": "tests", "command": "pnpm test" },
     { "label": "typecheck", "command": "pnpm run typecheck" }
   ],
   "budget": {
@@ -59,15 +78,13 @@ A Markdown file is accepted as a goal. Use JSON when you want the task's executo
 }
 ```
 
-The `goal` says what to do. The `verification` list is the completion contract: if any required command fails, Runi cannot mark the job complete.
-
-## Run a job
+Then run it against the target repository:
 
 ```bash
 pnpm run start -- start task.json --workdir /path/to/repository
 ```
 
-Or use a task file containing only a Markdown goal and configure the contract on the command line:
+A Markdown file can be used as the goal when the completion contract is supplied on the command line:
 
 ```bash
 pnpm run start -- start task.md \
@@ -78,21 +95,11 @@ pnpm run start -- start task.md \
   --wall-time 2h
 ```
 
-For a deterministic integration without OpenCode, use the generic command adapter. Runi supplies `RUNI_JOB_ID`, `RUNI_GOAL`, `RUNI_CONTEXT`, and `RUNI_ATTEMPT` as environment variables:
-
-```bash
-pnpm run start -- start task.md --agent command --command "./scripts/implement-task.sh" --verify "pnpm test"
-```
-
-Try the included smoke-test task with:
-
-```bash
-pnpm run start -- start examples/command-task.json
-```
+OpenCode must be installed and authenticated for agent-backed jobs. Pin a model with `--opencode-model provider/model` when reproducibility matters.
 
 ## Operate a durable job
 
-Every repository keeps its Runi data in `.runi/runi.db` (ignored by Git).
+Runi stores local state in `<workdir>/.runi/runi.db`.
 
 ```bash
 runi status
@@ -103,62 +110,73 @@ runi resume <job-id>
 runi stop <job-id>
 ```
 
-On every worker launch Runi records a checkpoint with job state and, where Git is available, the current revision and diff. If Runi or a worker exits, `runi resume <job-id>` runs the persisted job again with recovery context rather than relying on the old model session.
+`resume` starts a fresh worker with bounded recovery context and the current repository state. It does not depend on restoring the previous model session.
 
-## Reusable benchmark: OpenCode vs OpenCode + Runi
+## Use a deterministic command worker
 
-Runi includes a paired benchmark harness for repeatable regression testing. It runs ten small deterministic coding tasks twice, each in a new disposable workspace:
+The generic command adapter is useful for integration tests and ordinary automation:
 
-Latest published result: [10×2 benchmark with `opencode/mimo-v2.5-free`](benchmarks/reports/2026-08-25-mimo-v2.5-free.md) — both modes passed 10/10 hidden acceptance checks; this sample observed 9.1% fewer tokens and 11.4% less total time with Runi.
+```bash
+runi start task.md \
+  --agent command \
+  --command "./scripts/implement-task.sh" \
+  --verify "pnpm test"
+```
 
-- **OpenCode direct**: baseline check, one OpenCode operation, final hidden acceptance check.
-- **OpenCode + Runi**: the same prompt and model via the Runi supervisor, with the same baseline and final hidden acceptance check, retry budget and wall-time budget.
+Runi provides `RUNI_JOB_ID`, `RUNI_GOAL`, `RUNI_CONTEXT`, and `RUNI_ATTEMPT` to the command environment.
 
-The timer covers the complete operation, including verification. A task counts as successful only when the host-side hidden acceptance check exits with code 0. This prevents a worker's successful exit from being mistaken for a correct implementation.
+## Evidence and recovery
 
-Install and authenticate OpenCode first. On Windows, an explicit local executable keeps the benchmark isolated from global tools:
+The current lifecycle is deliberately small:
+
+```text
+created → working → verifying → complete
+             │          │
+             └ repairing ◀
+
+working / verifying / repairing
+  → paused | failed | cancelled | budget_exceeded
+```
+
+Baseline checks record the repository's initial condition. Final checks decide completion. Failed workers and failed verification are persisted with fingerprints so Runi can retry without looping forever on the same failure.
+
+## Benchmark
+
+Runi includes a reusable paired harness that runs the same task, model, prompt, workspace, and hidden acceptance verifier through:
+
+1. OpenCode directly;
+2. OpenCode supervised by Runi.
+
+The latest published [10×2 benchmark](benchmarks/reports/2026-08-25-mimo-v2.5-free.md) reached 10/10 independently verified completions in both modes. That sample observed 9.1% fewer tokens and 11.4% less total time with Runi; it is evidence from one paired run, not a universal performance claim.
 
 ```powershell
-pnpm --dir .benchmark-tools add opencode-ai
-.\.benchmark-tools\node_modules\opencode-ai\bin\opencode.exe auth list
 pnpm run build
 pnpm run benchmark -- run `
   --opencode .\.benchmark-tools\node_modules\opencode-ai\bin\opencode.exe `
-  --count 10 `
-  --max-attempts 3 `
-  --wall-time 10m
+  --model opencode/mimo-v2.5-free `
+  --count 10
 ```
 
-Use `--model provider/model` to pin the same model in both modes. On macOS/Linux, pass the corresponding `opencode` executable path. The run writes an ignored, timestamped directory under `benchmarks/runs/` containing:
+Reports include Markdown, JSON, CSV, raw worker logs, verification evidence, duration, attempts, retries, and provider telemetry. Missing token or cost telemetry is reported as `N/A`, never zero.
 
-- `BENCHMARK_REPORT.md`: verified-completion rate, total/mean/median/P95 execution time, retries, token/cost comparison and per-operation table.
-- `summary.json`: complete structured evidence, including verifier outputs and paths to the isolated workspaces.
-- `cases.csv`: one row per operation for spreadsheets or CI analysis.
-- `cases/<scenario>/<mode>/worker.log`: raw worker output.
+## Project direction
 
-When OpenCode/provider JSON output exposes token or cost telemetry, the report aggregates it by independent worker attempt and shows **tokens/cost saved by Runi** (or additional usage, if negative). If the selected provider does not expose those fields, the report explicitly shows `N/A`; it never invents zero token or cost usage.
+- **v0.1:** durable, verified, bounded single-worker supervisor.
+- **v0.2 (next):** adaptive recovery — failure classification, progress detection, recovery strategy selection, fault-injection benchmarks, and Leo's supervision experience.
+- Later versions may add structured execution knowledge, multiple workers, and provider-aware routing only after the simpler runtime proves its value.
 
-Regenerate a Markdown/CSV report from an existing JSON run without consuming more model tokens:
+Not in the current core: web dashboard, cloud service, multi-agent scheduling, automatic provider switching, or repository rollback.
+
+## Develop
 
 ```bash
-pnpm run benchmark -- report benchmarks/runs/<run-directory>
+pnpm install
+pnpm run build
+pnpm test
+pnpm run check
 ```
 
-## Lifecycle and evidence
-
-```text
-created → planning → working → verifying → reviewing → complete
-                         │             │
-                         └── repairing ◀┘
-
-working / verifying / repairing → paused | failed | cancelled | budget_exceeded
-```
-
-The worker's zero exit code only moves a job to `verifying`. Runi reaches `complete` only after every final verification command exits successfully. The command results and output are stored as evidence in SQLite.
-
-## Project scope
-
-Runi v0.1 is the durable single-agent supervisor. Future work may add richer recovery policies, other agent adapters, independent reviewers, usage/cost budgets, multi-agent scheduling and remote control — none of those are required for the core local workflow.
+Runi uses TypeScript, Node.js, built-in `node:sqlite`, and the Node test runner. There are no runtime dependencies.
 
 ## License
 

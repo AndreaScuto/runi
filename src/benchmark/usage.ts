@@ -74,16 +74,11 @@ function maximum(values: Array<number | undefined>): number | undefined {
   return known.length === 0 ? undefined : Math.max(...known);
 }
 
-function sumValues(usages: Array<Omit<TokenUsage, "samples">>, field: keyof Omit<TokenUsage, "samples">): number | undefined {
-  const values = usages.map((usage) => usage[field]).filter((value): value is number => typeof value === "number");
-  return values.length === 0 ? undefined : values.reduce((total, value) => total + value, 0);
-}
-
 function summedUsage(usages: Array<Omit<TokenUsage, "samples">>, samples: number): TokenUsage {
   const usage: TokenUsage = { samples };
   for (const field of ["inputTokens", "outputTokens", "reasoningTokens", "cacheReadTokens", "cacheWriteTokens", "totalTokens", "costUsd"] as const) {
-    const value = sumValues(usages, field);
-    if (value !== undefined) usage[field] = value;
+    const values = usages.map((entry) => entry[field]).filter((value): value is number => typeof value === "number");
+    if (values.length > 0) usage[field] = values.reduce((total, value) => total + value, 0);
   }
   return usage;
 }
@@ -126,24 +121,5 @@ export function usageFromOpenCodeOutput(output: string): TokenUsage | undefined 
 /** Adds per-attempt cumulative values; absent provider fields remain absent rather than being reported as zero. */
 export function sumAttemptUsage(usages: TokenUsage[]): TokenUsage | undefined {
   if (usages.length === 0) return undefined;
-  const sum = (field: keyof Omit<TokenUsage, "samples">): number | undefined => {
-    const values = usages.map((usage) => usage[field]).filter((value): value is number => typeof value === "number");
-    return values.length === 0 ? undefined : values.reduce((total, value) => total + value, 0);
-  };
-  const result: TokenUsage = { samples: usages.reduce((total, usage) => total + usage.samples, 0) };
-  const inputTokens = sum("inputTokens");
-  const outputTokens = sum("outputTokens");
-  const reasoningTokens = sum("reasoningTokens");
-  const cacheReadTokens = sum("cacheReadTokens");
-  const cacheWriteTokens = sum("cacheWriteTokens");
-  const totalTokens = sum("totalTokens");
-  const costUsd = sum("costUsd");
-  if (inputTokens !== undefined) result.inputTokens = inputTokens;
-  if (outputTokens !== undefined) result.outputTokens = outputTokens;
-  if (reasoningTokens !== undefined) result.reasoningTokens = reasoningTokens;
-  if (cacheReadTokens !== undefined) result.cacheReadTokens = cacheReadTokens;
-  if (cacheWriteTokens !== undefined) result.cacheWriteTokens = cacheWriteTokens;
-  if (totalTokens !== undefined) result.totalTokens = totalTokens;
-  if (costUsd !== undefined) result.costUsd = costUsd;
-  return result;
+  return summedUsage(usages, usages.reduce((total, usage) => total + usage.samples, 0));
 }

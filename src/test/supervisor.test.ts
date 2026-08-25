@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { CommandAdapter } from "../adapters/command.js";
 import type { AgentAdapter, AgentEvent, Job, WorkerSession } from "../domain.js";
 import { now } from "../domain.js";
 import { RuniStore } from "../storage.js";
@@ -11,7 +12,6 @@ import { Supervisor } from "../supervisor.js";
 class ScriptedAdapter implements AgentAdapter {
   readonly kind = "command" as const;
   starts = 0;
-  resumes = 0;
   constructor(private readonly outcomes: Array<number | { exitCode: number; output: string }>) {}
 
   async start(): Promise<WorkerSession> {
@@ -20,14 +20,8 @@ class ScriptedAdapter implements AgentAdapter {
     return this.session(typeof outcome === "number" ? { exitCode: outcome, output: outcome === 0 ? "done" : "temporary failure" } : outcome);
   }
 
-  async resume(): Promise<WorkerSession> {
-    this.resumes += 1;
-    return this.start();
-  }
-
   private session(outcome: { exitCode: number; output: string }): WorkerSession {
     return {
-      metadata: { test: true },
       async *events(): AsyncIterable<AgentEvent> {
         yield { type: "status", message: "scripted worker", createdAt: now() };
       },
@@ -70,6 +64,26 @@ test("supervisor completes only after persisted verification evidence", async (t
   assert.equal(result.attempts, 1);
   assert.equal(store.getVerificationResults(job.id).filter((entry) => entry.phase === "final")[0]?.exitCode, 0);
   assert.ok(store.getEvents(job.id).some((entry) => entry.type === "JOB_COMPLETED"));
+  assert.ok(store.getEvents(job.id).some((entry) => entry.type === "CHECKPOINT_CREATED"));
+  assert.ok(store.getEvents(job.id).some((entry) => entry.type === "WORKER_STARTED"));
+  assert.ok(store.getEvents(job.id).some((entry) => entry.type === "WORKER_FINISHED"));
+});
+
+test("generic command adapter preserves quoted shell commands", async (t) => {
+  const { root, store, job } = await fixture();
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  const commandJob: Job = {
+    ...job,
+    definition: {
+      ...job.definition,
+      executor: { kind: "command", command: `"${process.execPath}" -e "console.log('quoted worker ok')"` },
+    },
+  };
+  const session = await new CommandAdapter().start(commandJob, "");
+  for await (const _ of session.events()) { /* drain */ }
+  const result = await session.result;
+  assert.equal(result.exitCode, 0);
+  assert.match(result.output, /quoted worker ok/);
 });
 
 test("supervisor retries a failed worker and records recovery", async (t) => {
@@ -82,14 +96,15 @@ test("supervisor retries a failed worker and records recovery", async (t) => {
   assert.ok(store.getEvents(job.id).some((entry) => entry.type === "RECOVERY_SCHEDULED"));
 });
 
-test("supervisor identifies rate limits as transient failures before retrying", async (t) => {
+test("supervisor records failures before retrying", async (t) => {
   const { root, store, job } = await fixture();
   t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
   const adapter = new ScriptedAdapter([{ exitCode: 1, output: "HTTP 429 rate limit" }, 0]);
   const result = await new Supervisor(store, new Map([["command", adapter]])).run(job.id);
   assert.equal(result.status, "complete");
   const failure = store.getEvents(job.id).find((entry) => entry.type === "WORKER_FAILED");
-  assert.equal(failure?.payload.failureType, "transient");
+  assert.equal(failure?.payload.source, "worker");
+  assert.equal(typeof failure?.payload.fingerprint, "string");
 });
 
 test("supervisor stops an obvious repeated failure loop before exhausting attempts", async (t) => {
@@ -160,7 +175,6 @@ test("a persisted working job survives database reopen and resumes with a new wo
   const { root, store, job } = await fixture();
   let restarted: RuniStore | undefined;
   t.after(async () => { restarted?.close(); await rm(root, { recursive: true, force: true }); });
-  store.transitionJob(job.id, "planning", "TEST_PLANNING");
   store.transitionJob(job.id, "working", "TEST_WORKING");
   store.incrementAttempts(job.id);
   store.close();
@@ -170,14 +184,13 @@ test("a persisted working job survives database reopen and resumes with a new wo
   const adapter = new ScriptedAdapter([0]);
   const result = await new Supervisor(restarted, new Map([["command", adapter]])).run(job.id);
   assert.equal(result.status, "complete");
-  assert.equal(adapter.resumes, 1);
+  assert.equal(adapter.starts, 1);
   assert.equal(result.attempts, 2);
 });
 
 test("pause and resume preserve the lifecycle state to continue", async (t) => {
   const { root, store, job } = await fixture();
   t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
-  store.transitionJob(job.id, "planning", "TEST_PLANNING");
   store.transitionJob(job.id, "working", "TEST_WORKING");
   const paused = store.pauseJob(job.id);
   assert.equal(paused.status, "paused");

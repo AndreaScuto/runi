@@ -42,3 +42,28 @@ This project is indexed by GitNexus as **runi** (370 symbols, 1186 relationships
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
+
+## Second Brain
+
+Use `.brain/` only for durable knowledge that code and GitNexus do not explain well. Never read the whole directory by default.
+
+### Route by task
+
+| Need | Read |
+|------|------|
+| Product boundaries, trust model, architectural intent | `.brain/architecture.md` |
+| Completion, durability, budget, or benchmark rules | `.brain/invariants.md` |
+| Active migration, accepted debt, or current limitations | `.brain/state.md` |
+| Product milestones, current release target, or version scope | `.brain/versions.md` |
+| Test, database, benchmark, or documentation workflow | `.brain/workflows.md` |
+
+### Working order
+
+1. Read only the relevant `.brain` page, if any.
+2. Query GitNexus for execution flows, symbols, dependencies, callers, and blast radius.
+3. Inspect the minimum code needed to confirm the change.
+4. Run `impact` before editing symbols and report its risk as required above.
+5. Implement and run the proportionate tests.
+6. Update `.brain` only when a durable intent, invariant, decision, constraint, migration, debt item, or workflow changed.
+
+GitNexus remains the source of truth for code structure. Do not copy graph facts, source summaries, Git history, task logs, or transient status into `.brain`. For significant durable changes, use `.agents/skills/second-brain-maintain/SKILL.md`.

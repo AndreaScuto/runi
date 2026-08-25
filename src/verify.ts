@@ -1,15 +1,12 @@
-import { spawn } from "node:child_process";
+import { exec, type ExecException } from "node:child_process";
+import { promisify } from "node:util";
 import type { Job, VerificationCommand, VerificationResult } from "./domain.js";
 import { now } from "./domain.js";
 import type { RuniStore } from "./storage.js";
 
 const MAX_CAPTURED_OUTPUT = 32_000;
-
-function capture(chunks: string[], chunk: Buffer): void {
-  const joinedLength = chunks.reduce((length, current) => length + current.length, 0);
-  if (joinedLength >= MAX_CAPTURED_OUTPUT) return;
-  chunks.push(chunk.toString().slice(0, MAX_CAPTURED_OUTPUT - joinedLength));
-}
+const execAsync = promisify(exec);
+type ExecutionError = ExecException & { stdout?: string; stderr?: string };
 
 export async function executeVerificationCommand(
   job: Job,
@@ -32,36 +29,24 @@ export async function executeVerificationCommand(
       completedAt: now(),
     };
   }
-  const output: string[] = [];
-  const child = spawn(definition.command, {
-    cwd: job.definition.workingDirectory,
-    shell: true,
-    windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.stdout?.on("data", (chunk: Buffer) => capture(output, chunk));
-  child.stderr?.on("data", (chunk: Buffer) => capture(output, chunk));
+  let exitCode: number | null = 0;
   let timedOut = false;
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    child.kill("SIGTERM");
-  }, timeoutMs);
-
-  const exitCode = await new Promise<number | null>((resolve) => {
-    let settled = false;
-    const finish = (code: number | null) => {
-      if (!settled) {
-        settled = true;
-        resolve(code);
-      }
-    };
-    child.once("error", (error) => {
-      output.push(error.message);
-      finish(-1);
+  let output = "";
+  try {
+    const result = await execAsync(definition.command, {
+      cwd: job.definition.workingDirectory,
+      timeout: timeoutMs,
+      maxBuffer: 10_000_000,
+      windowsHide: true,
+      encoding: "utf8",
     });
-    child.once("close", (code) => finish(code));
-  });
-  clearTimeout(timeout);
+    output = `${result.stdout}${result.stderr}`;
+  } catch (error) {
+    const failure = error as ExecutionError;
+    exitCode = typeof failure.code === "number" ? failure.code : null;
+    timedOut = failure.killed === true;
+    output = `${failure.stdout ?? ""}${failure.stderr ?? ""}` || failure.message;
+  }
   return {
     jobId: job.id,
     phase,
@@ -69,7 +54,7 @@ export async function executeVerificationCommand(
     label: definition.label ?? definition.command,
     exitCode,
     timedOut,
-    output: output.join("").trim(),
+    output: output.slice(0, MAX_CAPTURED_OUTPUT).trim(),
     startedAt,
     completedAt: now(),
   };

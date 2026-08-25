@@ -12,11 +12,6 @@ export class OpenCodeAdapter implements AgentAdapter {
       shell: needsWindowsShell(invocation.binary),
     });
   }
-
-  async resume(job: Job, context: string): Promise<WorkerSession> {
-    return this.start(job, `${context}\n\nThis is a resumed durable job. Inspect the current repository before changing it.`);
-  }
-
 }
 
 export interface OpenCodeInvocation {

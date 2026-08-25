@@ -19,8 +19,4 @@ export class CommandAdapter implements AgentAdapter {
       },
     });
   }
-
-  async resume(job: Job, context: string): Promise<WorkerSession> {
-    return this.start(job, context);
-  }
 }

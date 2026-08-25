@@ -2,12 +2,10 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type {
-  Checkpoint,
   Job,
   JobEvent,
   JobStatus,
   VerificationResult,
-  WorkerRecord,
 } from "./domain.js";
 import { now } from "./domain.js";
 import { assertTransition, isTerminal } from "./state-machine.js";
@@ -102,7 +100,7 @@ export class RuniStore {
       const current = this.requireJob(id);
       assertTransition(current.status, nextStatus);
       const timestamp = now();
-      const startedAt = current.startedAt ?? (nextStatus === "planning" ? timestamp : undefined);
+      const startedAt = current.startedAt ?? (nextStatus === "working" ? timestamp : undefined);
       const completedAt = isTerminal(nextStatus) ? timestamp : undefined;
       this.database.prepare(`
         UPDATE jobs SET
@@ -190,57 +188,6 @@ export class RuniStore {
     return rows.filter((row) => parseJson<Record<string, unknown>>(row.payload_json, "event payload").fingerprint === fingerprint).length;
   }
 
-  createCheckpoint(checkpoint: Omit<Checkpoint, "id" | "createdAt">): Checkpoint {
-    const createdAt = now();
-    const result = this.database.prepare(`
-      INSERT INTO checkpoints (job_id, reason, snapshot_json, git_sha, git_diff, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      checkpoint.jobId,
-      checkpoint.reason,
-      JSON.stringify(checkpoint.snapshot),
-      checkpoint.gitSha ?? null,
-      checkpoint.gitDiff ?? null,
-      createdAt,
-    );
-    const id = Number(result.lastInsertRowid);
-    this.insertEvent(checkpoint.jobId, "CHECKPOINT_CREATED", { checkpointId: id, reason: checkpoint.reason });
-    return { id, ...checkpoint, createdAt };
-  }
-
-  latestCheckpoint(jobId: string): Checkpoint | undefined {
-    const row = this.database.prepare("SELECT * FROM checkpoints WHERE job_id = ? ORDER BY id DESC LIMIT 1").get(jobId) as Row | undefined;
-    if (!row) return undefined;
-    return {
-      id: numberValue(row.id),
-      jobId: text(row.job_id),
-      reason: text(row.reason),
-      snapshot: parseJson<Record<string, unknown>>(row.snapshot_json, "checkpoint snapshot"),
-      ...(optionalText(row.git_sha) === undefined ? {} : { gitSha: optionalText(row.git_sha)! }),
-      ...(optionalText(row.git_diff) === undefined ? {} : { gitDiff: optionalText(row.git_diff)! }),
-      createdAt: text(row.created_at),
-    };
-  }
-
-  createWorker(worker: Omit<WorkerRecord, "id" | "startedAt" | "status">): WorkerRecord {
-    const startedAt = now();
-    const result = this.database.prepare(`
-      INSERT INTO workers (job_id, kind, pid, status, metadata_json, started_at)
-      VALUES (?, ?, ?, 'running', ?, ?)
-    `).run(worker.jobId, worker.kind, worker.pid ?? null, JSON.stringify(worker.metadata), startedAt);
-    const id = Number(result.lastInsertRowid);
-    this.insertEvent(worker.jobId, "WORKER_STARTED", { workerId: id, kind: worker.kind, pid: worker.pid ?? null });
-    return { id, ...worker, status: "running", startedAt };
-  }
-
-  finishWorker(id: number, status: WorkerRecord["status"], exitCode: number | null): void {
-    const row = this.database.prepare("SELECT job_id FROM workers WHERE id = ?").get(id) as Row | undefined;
-    if (!row) throw new Error(`Worker not found: ${id}`);
-    const completedAt = now();
-    this.database.prepare("UPDATE workers SET status = ?, exit_code = ?, completed_at = ? WHERE id = ?").run(status, exitCode, completedAt, id);
-    this.insertEvent(text(row.job_id), "WORKER_FINISHED", { workerId: id, status, exitCode });
-  }
-
   saveVerification(result: VerificationResult): VerificationResult {
     const insert = this.database.prepare(`
       INSERT INTO verification_runs (
@@ -306,26 +253,6 @@ export class RuniStore {
         created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS events_job_id_id ON events(job_id, id);
-      CREATE TABLE IF NOT EXISTS checkpoints (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        job_id TEXT NOT NULL REFERENCES jobs(id),
-        reason TEXT NOT NULL,
-        snapshot_json TEXT NOT NULL,
-        git_sha TEXT,
-        git_diff TEXT,
-        created_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS workers (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        job_id TEXT NOT NULL REFERENCES jobs(id),
-        kind TEXT NOT NULL,
-        pid INTEGER,
-        status TEXT NOT NULL,
-        metadata_json TEXT NOT NULL,
-        started_at TEXT NOT NULL,
-        completed_at TEXT,
-        exit_code INTEGER
-      );
       CREATE TABLE IF NOT EXISTS verification_runs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         job_id TEXT NOT NULL REFERENCES jobs(id),

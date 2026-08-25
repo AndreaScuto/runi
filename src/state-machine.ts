@@ -1,13 +1,11 @@
 import { type JobStatus, TERMINAL_STATUSES } from "./domain.js";
 
 const transitions: Readonly<Record<JobStatus, readonly JobStatus[]>> = {
-  created: ["planning", "cancelled", "failed"],
-  planning: ["working", "paused", "cancelled", "failed", "budget_exceeded"],
+  created: ["working", "cancelled", "failed"],
   working: ["verifying", "repairing", "paused", "cancelled", "failed", "budget_exceeded"],
-  verifying: ["reviewing", "repairing", "paused", "cancelled", "failed", "budget_exceeded"],
+  verifying: ["complete", "repairing", "paused", "cancelled", "failed", "budget_exceeded"],
   repairing: ["working", "paused", "cancelled", "failed", "budget_exceeded"],
-  reviewing: ["complete", "repairing", "paused", "cancelled", "failed", "budget_exceeded"],
-  paused: ["planning", "working", "verifying", "repairing", "reviewing", "cancelled", "failed", "budget_exceeded"],
+  paused: ["working", "verifying", "repairing", "cancelled", "failed", "budget_exceeded"],
   complete: [],
   failed: [],
   cancelled: [],

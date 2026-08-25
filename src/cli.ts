@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { CommandAdapter } from "./adapters/command.js";
 import { OpenCodeAdapter } from "./adapters/opencode.js";
 import { formatDuration } from "./budget.js";
@@ -11,41 +12,23 @@ import { RuniStore } from "./storage.js";
 import { loadTaskDefinition, type StartOverrides } from "./task-file.js";
 import { Supervisor } from "./supervisor.js";
 
-interface ParsedArguments {
-  positionals: string[];
-  options: Map<string, string[]>;
+const CLI_OPTIONS = {
+  agent: { type: "string" },
+  command: { type: "string" },
+  "opencode-binary": { type: "string" },
+  "opencode-model": { type: "string" },
+  verify: { type: "string", multiple: true },
+  "max-attempts": { type: "string" },
+  "wall-time": { type: "string" },
+  workdir: { type: "string" },
+  help: { type: "boolean" },
+} as const;
+
+function parseArguments(argv: string[]) {
+  return parseArgs({ args: argv, allowPositionals: true, options: CLI_OPTIONS });
 }
 
-function parseArguments(argv: string[]): ParsedArguments {
-  const positionals: string[] = [];
-  const options = new Map<string, string[]>();
-  for (let index = 0; index < argv.length; index += 1) {
-    const value = argv[index]!;
-    if (!value.startsWith("--")) {
-      positionals.push(value);
-      continue;
-    }
-    const [name, inline] = value.slice(2).split("=", 2);
-    const next = inline ?? argv[index + 1];
-    if (!name) throw new Error("Invalid option.");
-    if (next === undefined || next.startsWith("--")) {
-      options.set(name, [...(options.get(name) ?? []), "true"]);
-    } else {
-      options.set(name, [...(options.get(name) ?? []), next]);
-      if (inline === undefined) index += 1;
-    }
-  }
-  return { positionals, options };
-}
-
-function option(args: ParsedArguments, name: string): string | undefined {
-  return args.options.get(name)?.at(-1);
-}
-
-function options(args: ParsedArguments, name: string): string[] | undefined {
-  const values = args.options.get(name);
-  return values?.includes("true") ? undefined : values;
-}
+type ParsedArguments = ReturnType<typeof parseArguments>;
 
 function requirePositional(args: ParsedArguments, index: number, command: string): string {
   const value = args.positionals[index];
@@ -106,20 +89,20 @@ Start options:
 
 async function start(args: ParsedArguments): Promise<number> {
   const task = requirePositional(args, 1, "runi start <task.md|task.json>");
-  const workingDirectory = resolve(option(args, "workdir") ?? process.cwd());
+  const workingDirectory = resolve(args.values.workdir ?? process.cwd());
   if (!existsSync(workingDirectory)) throw new Error(`Working directory does not exist: ${workingDirectory}`);
-  const maxAttemptsText = option(args, "max-attempts");
+  const maxAttemptsText = args.values["max-attempts"];
   const parsedAttempts = maxAttemptsText === undefined ? undefined : Number(maxAttemptsText);
   if (parsedAttempts !== undefined && (!Number.isInteger(parsedAttempts) || parsedAttempts < 1)) {
     throw new Error("--max-attempts must be a positive integer.");
   }
   const overrides: StartOverrides = { workingDirectory };
-  const agent = option(args, "agent");
-  const command = option(args, "command");
-  const binary = option(args, "opencode-binary");
-  const model = option(args, "opencode-model");
-  const verification = options(args, "verify");
-  const wallTime = option(args, "wall-time");
+  const agent = args.values.agent;
+  const command = args.values.command;
+  const binary = args.values["opencode-binary"];
+  const model = args.values["opencode-model"];
+  const verification = args.values.verify;
+  const wallTime = args.values["wall-time"];
   if (agent !== undefined) overrides.agent = agent;
   if (command !== undefined) overrides.command = command;
   if (binary !== undefined) overrides.binary = binary;
@@ -150,7 +133,7 @@ async function start(args: ParsedArguments): Promise<number> {
 }
 
 function openStore(args: ParsedArguments): RuniStore {
-  const workingDirectory = resolve(option(args, "workdir") ?? process.cwd());
+  const workingDirectory = resolve(args.values.workdir ?? process.cwd());
   return new RuniStore(databasePath(workingDirectory));
 }
 
@@ -206,8 +189,6 @@ function inspect(args: ParsedArguments): number {
     for (const result of results) {
       console.log(`  ${result.phase.padEnd(8)} ${result.exitCode === 0 && !result.timedOut ? "PASS" : "FAIL"} ${result.label}`);
     }
-    const checkpoint = store.latestCheckpoint(job.id);
-    if (checkpoint) console.log(`\nLatest checkpoint ${checkpoint.id} (${checkpoint.reason}) at ${checkpoint.createdAt}`);
     return 0;
   } finally {
     store.close();
@@ -253,7 +234,7 @@ function stop(args: ParsedArguments): number {
 export async function run(argv: string[]): Promise<number> {
   const args = parseArguments(argv);
   const command = args.positionals[0];
-  if (command === undefined || command === "help" || option(args, "help") === "true") {
+  if (command === undefined || command === "help" || args.values.help === true) {
     help();
     return 0;
   }
