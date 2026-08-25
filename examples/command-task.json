@@ -1,0 +1,17 @@
+{
+  "goal": "Run a deterministic command worker and verify its result.",
+  "executor": {
+    "kind": "command",
+    "command": "node -e \"console.log('worker completed')\""
+  },
+  "verification": [
+    {
+      "label": "node is available",
+      "command": "node -e \"process.exit(0)\""
+    }
+  ],
+  "budget": {
+    "maxAttempts": 2,
+    "wallTime": "5m"
+  }
+}

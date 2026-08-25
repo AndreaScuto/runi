@@ -1,0 +1,275 @@
+#!/usr/bin/env node
+import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { CommandAdapter } from "./adapters/command.js";
+import { OpenCodeAdapter } from "./adapters/opencode.js";
+import { formatDuration } from "./budget.js";
+import { now, type AgentAdapter, type Job } from "./domain.js";
+import { RuniStore } from "./storage.js";
+import { loadTaskDefinition, type StartOverrides } from "./task-file.js";
+import { Supervisor } from "./supervisor.js";
+
+interface ParsedArguments {
+  positionals: string[];
+  options: Map<string, string[]>;
+}
+
+function parseArguments(argv: string[]): ParsedArguments {
+  const positionals: string[] = [];
+  const options = new Map<string, string[]>();
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index]!;
+    if (!value.startsWith("--")) {
+      positionals.push(value);
+      continue;
+    }
+    const [name, inline] = value.slice(2).split("=", 2);
+    const next = inline ?? argv[index + 1];
+    if (!name) throw new Error("Invalid option.");
+    if (next === undefined || next.startsWith("--")) {
+      options.set(name, [...(options.get(name) ?? []), "true"]);
+    } else {
+      options.set(name, [...(options.get(name) ?? []), next]);
+      if (inline === undefined) index += 1;
+    }
+  }
+  return { positionals, options };
+}
+
+function option(args: ParsedArguments, name: string): string | undefined {
+  return args.options.get(name)?.at(-1);
+}
+
+function options(args: ParsedArguments, name: string): string[] | undefined {
+  const values = args.options.get(name);
+  return values?.includes("true") ? undefined : values;
+}
+
+function requirePositional(args: ParsedArguments, index: number, command: string): string {
+  const value = args.positionals[index];
+  if (!value) throw new Error(`Usage: ${command}`);
+  return value;
+}
+
+function databasePath(workingDirectory: string): string {
+  return join(workingDirectory, ".runi", "runi.db");
+}
+
+function supervisor(store: RuniStore): Supervisor {
+  return new Supervisor(store, new Map<string, AgentAdapter>([
+    ["opencode", new OpenCodeAdapter()],
+    ["command", new CommandAdapter()],
+  ]));
+}
+
+function shortId(id: string): string {
+  return id.slice(0, 14);
+}
+
+function printJob(job: Job): void {
+  const elapsed = Date.now() - Date.parse(job.startedAt ?? job.createdAt);
+  console.log(`\nJOB ${job.id}`);
+  console.log(`Goal        ${job.definition.goal}`);
+  console.log(`State       ${job.status.toUpperCase()}`);
+  console.log(`Worker      ${job.definition.executor.kind}`);
+  console.log(`Attempts    ${job.attempts} / ${job.definition.budget.maxAttempts}`);
+  console.log(`Elapsed     ${formatDuration(elapsed)}`);
+  if (job.definition.budget.wallTimeMs !== undefined) console.log(`Wall budget ${formatDuration(job.definition.budget.wallTimeMs)}`);
+  if (job.exitReason) console.log(`Reason      ${job.exitReason}`);
+}
+
+function help(): void {
+  console.log(`Runi 0.1 — durable execution for coding agents
+
+Usage:
+  runi start <task.md|task.json> [options]
+  runi status [job-id] [--workdir <dir>]
+  runi inspect <job-id> [--workdir <dir>]
+  runi logs <job-id> [--workdir <dir>]
+  runi pause <job-id> [--workdir <dir>]
+  runi resume <job-id> [--workdir <dir>]
+  runi stop <job-id> [--workdir <dir>]
+
+Start options:
+  --agent <opencode|command>     Worker adapter (default: opencode)
+  --command <command>            Command for the generic command adapter
+  --opencode-binary <path>       OpenCode executable (default: opencode)
+  --verify <command>             Required verification command; repeatable
+  --max-attempts <n>             Hard attempt budget
+  --wall-time <duration>         Hard wall-time budget (for example: 90m)
+  --workdir <dir>                Repository to supervise (default: current directory)
+`);
+}
+
+async function start(args: ParsedArguments): Promise<number> {
+  const task = requirePositional(args, 1, "runi start <task.md|task.json>");
+  const workingDirectory = resolve(option(args, "workdir") ?? process.cwd());
+  if (!existsSync(workingDirectory)) throw new Error(`Working directory does not exist: ${workingDirectory}`);
+  const maxAttemptsText = option(args, "max-attempts");
+  const parsedAttempts = maxAttemptsText === undefined ? undefined : Number(maxAttemptsText);
+  if (parsedAttempts !== undefined && (!Number.isInteger(parsedAttempts) || parsedAttempts < 1)) {
+    throw new Error("--max-attempts must be a positive integer.");
+  }
+  const overrides: StartOverrides = { workingDirectory };
+  const agent = option(args, "agent");
+  const command = option(args, "command");
+  const binary = option(args, "opencode-binary");
+  const verification = options(args, "verify");
+  const wallTime = option(args, "wall-time");
+  if (agent !== undefined) overrides.agent = agent;
+  if (command !== undefined) overrides.command = command;
+  if (binary !== undefined) overrides.binary = binary;
+  if (verification !== undefined) overrides.verification = verification;
+  if (parsedAttempts !== undefined) overrides.maxAttempts = parsedAttempts;
+  if (wallTime !== undefined) overrides.wallTime = wallTime;
+  const definition = await loadTaskDefinition(task, overrides);
+  const store = new RuniStore(databasePath(workingDirectory));
+  try {
+    const timestamp = now();
+    const job: Job = {
+      id: `rn_${randomUUID().replaceAll("-", "").slice(0, 16)}`,
+      status: "created",
+      definition,
+      attempts: 0,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    store.createJob(job);
+    console.log(`Started durable job ${job.id}. State is persisted in ${databasePath(workingDirectory)}.`);
+    const completed = await supervisor(store).run(job.id);
+    printJob(completed);
+    return completed.status === "complete" ? 0 : 1;
+  } finally {
+    store.close();
+  }
+}
+
+function openStore(args: ParsedArguments): RuniStore {
+  const workingDirectory = resolve(option(args, "workdir") ?? process.cwd());
+  return new RuniStore(databasePath(workingDirectory));
+}
+
+async function resume(args: ParsedArguments): Promise<number> {
+  const jobId = requirePositional(args, 1, "runi resume <job-id>");
+  const store = openStore(args);
+  try {
+    const job = store.resumeJob(jobId);
+    console.log(`Resuming ${job.id} from ${job.status}.`);
+    const completed = await supervisor(store).run(job.id);
+    printJob(completed);
+    return completed.status === "complete" ? 0 : 1;
+  } finally {
+    store.close();
+  }
+}
+
+function status(args: ParsedArguments): number {
+  const store = openStore(args);
+  try {
+    const jobId = args.positionals[1];
+    if (jobId) {
+      printJob(store.requireJob(jobId));
+      return 0;
+    }
+    const jobs = store.listJobs();
+    if (jobs.length === 0) {
+      console.log("No Runi jobs found.");
+      return 0;
+    }
+    console.log("ID             STATE              ATTEMPTS  GOAL");
+    for (const job of jobs) {
+      console.log(`${shortId(job.id).padEnd(14)} ${job.status.padEnd(18)} ${`${job.attempts}/${job.definition.budget.maxAttempts}`.padEnd(9)} ${job.definition.goal}`);
+    }
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+function inspect(args: ParsedArguments): number {
+  const jobId = requirePositional(args, 1, "runi inspect <job-id>");
+  const store = openStore(args);
+  try {
+    const job = store.requireJob(jobId);
+    printJob(job);
+    console.log("\nCompletion contract");
+    if (job.definition.verification.length === 0) console.log("  No verification commands configured (completion cannot be evidence-backed).");
+    for (const check of job.definition.verification) console.log(`  - ${check.label ?? check.command}: ${check.command}`);
+    console.log("\nVerification history");
+    const results = store.getVerificationResults(job.id);
+    if (results.length === 0) console.log("  No checks run yet.");
+    for (const result of results) {
+      console.log(`  ${result.phase.padEnd(8)} ${result.exitCode === 0 && !result.timedOut ? "PASS" : "FAIL"} ${result.label}`);
+    }
+    const checkpoint = store.latestCheckpoint(job.id);
+    if (checkpoint) console.log(`\nLatest checkpoint ${checkpoint.id} (${checkpoint.reason}) at ${checkpoint.createdAt}`);
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+function logs(args: ParsedArguments): number {
+  const jobId = requirePositional(args, 1, "runi logs <job-id>");
+  const store = openStore(args);
+  try {
+    for (const event of store.getEvents(jobId, 500)) {
+      const payload = Object.keys(event.payload).length === 0 ? "" : ` ${JSON.stringify(event.payload)}`;
+      console.log(`${event.sequence.toString().padStart(6, "0")} ${event.createdAt} ${event.type}${payload}`);
+    }
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+function pause(args: ParsedArguments): number {
+  const jobId = requirePositional(args, 1, "runi pause <job-id>");
+  const store = openStore(args);
+  try {
+    printJob(store.pauseJob(jobId));
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+function stop(args: ParsedArguments): number {
+  const jobId = requirePositional(args, 1, "runi stop <job-id>");
+  const store = openStore(args);
+  try {
+    printJob(store.cancelJob(jobId));
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+export async function run(argv: string[]): Promise<number> {
+  const args = parseArguments(argv);
+  const command = args.positionals[0];
+  if (command === undefined || command === "help" || option(args, "help") === "true") {
+    help();
+    return 0;
+  }
+  if (command === "start") return start(args);
+  if (command === "status") return status(args);
+  if (command === "inspect") return inspect(args);
+  if (command === "logs") return logs(args);
+  if (command === "pause") return pause(args);
+  if (command === "resume") return resume(args);
+  if (command === "stop") return stop(args);
+  throw new Error(`Unknown command: ${command}`);
+}
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  run(process.argv.slice(2)).then(
+    (code) => { process.exitCode = code; },
+    (error: unknown) => {
+      console.error(`runi: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 2;
+    },
+  );
+}
