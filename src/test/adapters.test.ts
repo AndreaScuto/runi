@@ -26,9 +26,10 @@ test("Codex adapter uses safe non-interactive workspace execution", () => {
   const invocation = codexInvocation(job("codex", "codex-test", "codex-model"), "retry context");
   assert.equal(invocation.binary, "codex-test");
   assert.deepEqual(invocation.args.slice(0, 7), [
-    "exec", "--approve-for-me",
-    "--color", "never", "--json", "--model", "codex-model",
+    "exec", "--approve-for-me", "--skip-git-repo-check",
+    "--color", "never", "--json", "--model",
   ]);
+  assert.equal(invocation.args[7], "codex-model");
   assert.ok(!invocation.args.includes("--sandbox"));
   assert.ok(!invocation.args.includes("--ask-for-approval"));
   assert.match(invocation.args.at(-1) ?? "", /retry context/);

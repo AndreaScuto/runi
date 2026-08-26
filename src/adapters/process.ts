@@ -24,9 +24,10 @@ export class ProcessWorkerSession implements WorkerSession {
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     };
+    const spawnArgs = windowsShim ? args.map((arg) => arg.replace(/\r?\n/g, " ")) : args;
     this.child = windowsShim && args.length === 0
       ? spawn(command, { ...spawnOptions, shell: true })
-      : spawn(windowsShim ? process.env.ComSpec ?? "cmd.exe" : command, windowsShim ? ["/d", "/s", "/c", command, ...args] : args, spawnOptions);
+      : spawn(windowsShim ? process.env.ComSpec ?? "cmd.exe" : command, windowsShim ? ["/d", "/s", "/c", command, ...spawnArgs] : spawnArgs, spawnOptions);
     if (this.child.pid !== undefined) this.pid = this.child.pid;
     this.child.stdout?.on("data", (chunk: Buffer) => this.consume("stdout", chunk.toString()));
     this.child.stderr?.on("data", (chunk: Buffer) => this.consume("stderr", chunk.toString()));

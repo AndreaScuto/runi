@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   diagnoseAgent,
   executableCandidates,
+  listAgentModels,
   type AgentProbe,
 } from "../agents.js";
 
@@ -101,6 +102,31 @@ test("OpenCode is READY without credentials when its free models are available",
   assert.equal(result.status, "READY");
   assert.match(result.detail, /free model/i);
   assert.deepEqual(calls, [["--version"], ["auth", "list"], ["models", "opencode"]]);
+});
+
+test("model discovery reads OpenCode's installed catalog", async () => {
+  const models = await listAgentModels("opencode", "/usr/local/bin/opencode", process.cwd(), async (_binary, args) => {
+    assert.deepEqual(args, ["models"]);
+    return { exitCode: 0, output: "provider/model-a\nprovider/model-b\n" };
+  });
+  assert.deepEqual(models, ["provider/model-a", "provider/model-b"]);
+});
+
+test("model discovery reads Codex's machine-readable model catalog", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "runi-codex-models-"));
+  try {
+    const server = join(directory, "model-server.mjs");
+    const binary = join(directory, process.platform === "win32" ? "codex.cmd" : "codex");
+    writeFileSync(server, `let buffer = '';\nprocess.stdin.setEncoding('utf8');\nprocess.stdin.on('data', chunk => {\n  buffer += chunk;\n  const lines = buffer.split(/\\r?\\n/); buffer = lines.pop() ?? '';\n  for (const line of lines) {\n    const request = JSON.parse(line);\n    if (request.id === 1) console.log(JSON.stringify({id: 1, result: {userAgent: 'fake'}}));\n    if (request.id === 2) console.log(JSON.stringify({id: 2, result: {data: [{model: 'gpt-test-a'}, {model: 'gpt-test-b'}]}}));\n  }\n});\n`);
+    writeFileSync(binary, process.platform === "win32"
+      ? `@echo off\r\n\"${process.execPath}\" \"${server}\"\r\n`
+      : `#!/bin/sh\nexec '${process.execPath}' '${server}'\n`);
+    if (process.platform !== "win32") chmodSync(binary, 0o755);
+
+    assert.deepEqual(await listAgentModels("codex", binary, directory), ["gpt-test-a", "gpt-test-b"]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("a synchronous spawn failure becomes NOT EXECUTABLE instead of crashing doctor", async () => {

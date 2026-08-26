@@ -1,4 +1,5 @@
 import { existsSync, statSync } from "node:fs";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
 import { ProcessWorkerSession } from "./adapters/process.js";
@@ -136,6 +137,77 @@ function authArguments(agent: CodingAgent): string[] {
   if (agent === "opencode") return ["auth", "list"];
   if (agent === "codex") return ["login", "status"];
   return ["auth", "status"];
+}
+
+function agentProcess(binary: string, args: string[], options: { cwd: string; stdio: "inherit" | "pipe" }): ChildProcess {
+  const stdio: SpawnOptions["stdio"] = options.stdio === "inherit" ? "inherit" : ["pipe", "pipe", "pipe"];
+  return needsWindowsShell(binary)
+    ? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", binary, ...args], { cwd: options.cwd, env: process.env, windowsHide: true, stdio })
+    : spawn(binary, args, { cwd: options.cwd, env: process.env, windowsHide: true, stdio });
+}
+
+/** Launches the selected CLI's own login flow. Credentials remain owned by that CLI. */
+export async function authenticateAgent(agent: CodingAgent, binary: string, workingDirectory: string): Promise<void> {
+  const child = agentProcess(binary, agent === "codex" ? ["login"] : ["auth", "login"], { cwd: workingDirectory, stdio: "inherit" });
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", resolve);
+  });
+  if (exitCode !== 0) throw new Error(`${agent} authentication ended with exit code ${exitCode ?? "unknown"}.`);
+}
+
+async function codexModels(binary: string, workingDirectory: string): Promise<string[]> {
+  const child = agentProcess(binary, ["app-server", "--stdio"], { cwd: workingDirectory, stdio: "pipe" });
+  return new Promise((resolveModels) => {
+    let buffer = "";
+    let finished = false;
+    const finish = (models: string[] = []) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      if (child.exitCode !== null) resolveModels(models);
+      else {
+        child.once("close", () => resolveModels(models));
+        child.kill();
+      }
+    };
+    const consume = (text: string) => {
+      buffer += text;
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        try {
+          const message = JSON.parse(line) as { id?: number; result?: { data?: Array<{ model?: unknown; id?: unknown }> } };
+          if (message.id === 1) child.stdin?.write(`${JSON.stringify({ id: 2, method: "model/list", params: { includeHidden: false } })}\n`);
+          if (message.id === 2) finish((message.result?.data ?? [])
+            .map((model) => typeof model.model === "string" ? model.model : typeof model.id === "string" ? model.id : "")
+            .filter(Boolean));
+        } catch {
+          // Ignore diagnostics and notifications; only JSON-RPC responses matter.
+        }
+      }
+    };
+    const timer = setTimeout(() => finish(), 12_000);
+    timer.unref();
+    child.stdout?.on("data", (chunk: Buffer) => consume(chunk.toString()));
+    child.once("error", () => finish());
+    child.once("close", () => finish());
+    child.stdin?.write(`${JSON.stringify({ id: 1, method: "initialize", params: { clientInfo: { name: "runi", version: "0.2.0" } } })}\n`);
+  });
+}
+
+/** Retrieves models from the installed CLI when it exposes a machine-readable catalog. */
+export async function listAgentModels(agent: CodingAgent, binary: string, workingDirectory: string, probe: AgentProbe = defaultProbe): Promise<string[]> {
+  if (agent === "codex") return codexModels(binary, workingDirectory);
+  if (agent !== "opencode") return [];
+  try {
+    const result = await probe(binary, ["models"]);
+    if (result.exitCode !== 0) return [];
+    return unique(result.output.split(/\r?\n/).map((line) => line.replace(/\x1b\[[0-9;]*m/g, "").trim())
+      .filter((line) => line.length > 0 && line.length < 160 && !/\s/.test(line)));
+  } catch {
+    return [];
+  }
 }
 
 function firstLine(output: string): string | undefined {

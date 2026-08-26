@@ -10,14 +10,14 @@ import { CodexAdapter } from "./adapters/codex.js";
 import { CommandAdapter } from "./adapters/command.js";
 import { OpenCodeAdapter } from "./adapters/opencode.js";
 import { formatDuration } from "./budget.js";
-import { now, type AgentAdapter, type Job } from "./domain.js";
+import { now, type AgentAdapter, type Job, type JobEvent } from "./domain.js";
 import { RuniStore } from "./storage.js";
 import { loadTaskDefinition, type StartOverrides } from "./task-file.js";
 import { Supervisor } from "./supervisor.js";
 import { createGuidedTask } from "./wizard.js";
 import { createInteractiveUi, runInteractive, type InteractiveJob, type InteractiveUi } from "./interactive.js";
 import { loadSettings, saveSettings, type RuniSettings } from "./settings.js";
-import { CODING_AGENTS, diagnoseAgent, type AgentDiagnostic } from "./agents.js";
+import { authenticateAgent, CODING_AGENTS, diagnoseAgent, listAgentModels, type AgentDiagnostic } from "./agents.js";
 
 const CLI_OPTIONS = {
   agent: { type: "string" },
@@ -150,10 +150,10 @@ function diagnosticChoice(diagnostic: AgentDiagnostic) {
     ? diagnostic.binary
     : `${diagnostic.status}: ${diagnostic.detail}`;
   return {
-    value: diagnostic.agent,
-    label: diagnostic.agent,
+    value: diagnostic.status === "NOT AUTHENTICATED" ? `auth:${diagnostic.agent}` : diagnostic.agent,
+    label: diagnostic.status === "NOT AUTHENTICATED" ? `Sign in to ${diagnostic.agent}` : diagnostic.agent,
     ...(detail === undefined ? {} : { hint: detail }),
-    ...(diagnostic.status === "READY" ? {} : { disabled: true }),
+    ...(diagnostic.status === "READY" || diagnostic.status === "NOT AUTHENTICATED" ? {} : { disabled: true }),
   };
 }
 
@@ -164,9 +164,10 @@ async function agentDiagnostics(workingDirectory: string, current?: RuniSettings
   })));
 }
 
-async function doctor(args: ParsedArguments): Promise<number> {
+async function doctor(args: ParsedArguments, ui?: InteractiveUi): Promise<number> {
   const workingDirectory = resolve(args.values.workdir ?? process.cwd());
-  const diagnostics = await agentDiagnostics(workingDirectory, loadSettings(workingDirectory));
+  const action = () => agentDiagnostics(workingDirectory, loadSettings(workingDirectory));
+  const diagnostics = ui?.loading ? await ui.loading("Checking installed agents", action) : await action();
   console.log("AGENT      STATUS                 EXECUTABLE / ACTION");
   for (const diagnostic of diagnostics) {
     const detail = diagnostic.binary ?? diagnostic.detail;
@@ -193,6 +194,19 @@ async function guidedTask(goal: string, workingDirectory: string, grill: boolean
         if (answer === undefined) throw new Error("Interactive task creation cancelled.");
         return answer;
       },
+      confirmWorkspace: async (path) => await ui.choose(
+        `Codex requires approval outside Git. Trust ${path} for this Runi job?`,
+        [
+          { value: "yes", label: "Trust for this job", hint: "Codex stays sandboxed; Runi still verifies completion" },
+          { value: "no", label: "Cancel" },
+        ],
+        "yes",
+      ) === "yes",
+      models: async (agent, binary) => {
+        const action = () => listAgentModels(agent, binary, workingDirectory);
+        return ui.loading ? ui.loading(`Retrieving ${agent} models`, action) : action();
+      },
+      ...(ui.loading === undefined ? {} : { loading: ui.loading.bind(ui) }),
     });
     console.log(`Saved reusable task to ${path}.`);
     return path;
@@ -224,17 +238,31 @@ async function settings(args: ParsedArguments, ui?: InteractiveUi): Promise<numb
     return answer;
   };
   try {
-    const diagnostics = await agentDiagnostics(workingDirectory, current);
-    const choices = [
-      ...diagnostics.map(diagnosticChoice),
-      { value: "command", label: "command", hint: "Run any installed CLI or local command" },
-    ];
-    const ready = new Set(diagnostics.filter((diagnostic) => diagnostic.status === "READY").map((diagnostic) => diagnostic.agent));
-    const initial = current.agent === "command" || ready.has(current.agent as typeof CODING_AGENTS[number])
-      ? current.agent
-      : diagnostics.find((diagnostic) => diagnostic.status === "READY")?.agent ?? "command";
-    const selected = await prompt.choose("Default worker agent", choices, initial);
-    if (selected === undefined) throw new Error("Settings cancelled.");
+    let diagnostics: AgentDiagnostic[];
+    let selected: string;
+    while (true) {
+      const action = () => agentDiagnostics(workingDirectory, current);
+      diagnostics = prompt.loading ? await prompt.loading("Checking installed agents", action) : await action();
+      const choices = [
+        ...diagnostics.map(diagnosticChoice),
+        { value: "command", label: "command", hint: "Run any installed CLI or local command" },
+      ];
+      const ready = new Set(diagnostics.filter((diagnostic) => diagnostic.status === "READY").map((diagnostic) => diagnostic.agent));
+      const initial = current.agent === "command" || ready.has(current.agent as typeof CODING_AGENTS[number])
+        ? current.agent
+        : diagnostics.find((diagnostic) => diagnostic.status === "READY")?.agent ?? "command";
+      const answer = await prompt.choose("Default worker agent", choices, initial);
+      if (answer === undefined) throw new Error("Settings cancelled.");
+      if (!answer.startsWith("auth:")) {
+        selected = answer;
+        break;
+      }
+      const agent = answer.slice(5) as typeof CODING_AGENTS[number];
+      const diagnostic = diagnostics.find((entry) => entry.agent === agent);
+      if (!diagnostic?.binary) throw new Error(`${agent} executable unavailable.`);
+      prompt.info(`Runi will open ${agent}'s native login. Credentials remain in ${agent}.`, `Sign in to ${agent}`);
+      await authenticateAgent(agent, diagnostic.binary, workingDirectory);
+    }
     const agent = selected as RuniSettings["agent"];
     const next: RuniSettings = {
       agent,
@@ -248,11 +276,18 @@ async function settings(args: ParsedArguments, ui?: InteractiveUi): Promise<numb
       next.command = command;
       next.verificationPolicy = "manual";
     } else {
-      const model = await prompt.input("Default model (blank uses agent default)", current.agent === agent ? current.model : undefined);
-      if (model) next.model = model;
       const diagnostic = diagnostics.find((entry) => entry.agent === agent);
       if (diagnostic?.status !== "READY" || !diagnostic.binary) throw new Error(`${agent} is not ready: ${diagnostic?.detail ?? "executable unavailable"}`);
       next.binary = diagnostic.binary;
+      const modelAction = () => listAgentModels(agent, diagnostic.binary!, workingDirectory);
+      const models = prompt.loading ? await prompt.loading(`Retrieving ${agent} models`, modelAction) : await modelAction();
+      const currentModel = current.agent === agent ? current.model : undefined;
+      const options = ["Agent default", ...new Set(models), ...(currentModel && !models.includes(currentModel) ? [currentModel] : []), "Enter model manually…"];
+      const selectedModel = await choose("Default model", options, currentModel ?? "Agent default");
+      const model = selectedModel === "Enter model manually…"
+        ? await prompt.input("Model identifier", currentModel)
+        : selectedModel === "Agent default" ? undefined : selectedModel;
+      if (model) next.model = model;
     }
     const attempt = await choose("Default maximum attempts", ["1", "2", "3", "5", "Custom…"], String(current.maxAttempts));
     next.maxAttempts = Number(attempt === "Custom…" ? await prompt.input("Maximum attempts", String(current.maxAttempts)) : attempt);
@@ -386,13 +421,62 @@ function logs(args: ParsedArguments): number {
   const store = openStore(args);
   try {
     for (const event of store.getEvents(jobId, 500)) {
-      const payload = Object.keys(event.payload).length === 0 ? "" : ` ${JSON.stringify(event.payload)}`;
-      console.log(`${event.sequence.toString().padStart(6, "0")} ${event.createdAt} ${event.type}${payload}`);
+      console.log(formatEvent(event));
     }
     return 0;
   } finally {
     store.close();
   }
+}
+
+function providerMessage(message: string): string | undefined {
+  try {
+    const event = JSON.parse(message) as {
+      type?: string;
+      part?: { type?: string; text?: string; tool?: string; state?: { status?: string; title?: string }; tokens?: { total?: number; input?: number; output?: number } };
+      item?: { type?: string; text?: string };
+      message?: string;
+    };
+    if (event.part?.type === "text" && event.part.text) return event.part.text;
+    if (event.part?.type === "tool") return ["tool", event.part.tool, event.part.state?.status, event.part.state?.title].filter(Boolean).join(" · ");
+    if (event.part?.type === "step-finish" && event.part.tokens?.total !== undefined) {
+      return `usage · ${event.part.tokens.total.toLocaleString("en-US")} tokens · in ${event.part.tokens.input ?? "?"} · out ${event.part.tokens.output ?? "?"}`;
+    }
+    if (event.item?.type === "agent_message" && event.item.text) return event.item.text;
+    return event.message;
+  } catch {
+    return message;
+  }
+}
+
+function payloadSummary(event: JobEvent): string {
+  if (event.type === "AGENT_STDOUT" || event.type === "AGENT_STDERR") {
+    const message = event.payload.message;
+    return typeof message === "string" ? providerMessage(message) ?? message : "";
+  }
+  if (event.type === "VERIFICATION_RESULT") {
+    const passed = event.payload.exitCode === 0 && event.payload.timedOut !== true ? "PASS" : "FAIL";
+    return `${event.payload.phase ?? "check"} · ${passed} · ${event.payload.label ?? "verification"}`;
+  }
+  return Object.entries(event.payload).map(([key, value]) => {
+    const text = typeof value === "string" ? value : String(value);
+    return `${key}=${text}`;
+  }).join(" · ");
+}
+
+export function formatEvent(event: JobEvent): string {
+  const names: Record<string, string> = {
+    AGENT_STDOUT: "agent",
+    AGENT_STDERR: "agent !",
+    VERIFICATION_RESULT: "verify",
+    WORKER_STARTED: "worker",
+    WORKER_FINISHED: "worker",
+    WORKER_FAILED: "failure",
+    JOB_COMPLETED: "complete",
+  };
+  const label = (names[event.type] ?? event.type.toLowerCase().replaceAll("_", " ")).padEnd(18);
+  const prefix = `${event.sequence.toString().padStart(6, "0")} ${event.createdAt.slice(11, 19)} ${label}`;
+  return `${prefix}${payloadSummary(event)}`.replaceAll("\n", `\n${" ".repeat(prefix.length)}`);
 }
 
 function pause(args: ParsedArguments): number {
@@ -433,7 +517,7 @@ export async function run(argv: string[], ui?: InteractiveUi): Promise<number> {
   if (command === "resume") return resume(args);
   if (command === "stop") return stop(args);
   if (command === "settings") return settings(args, ui);
-  if (command === "doctor") return doctor(args);
+  if (command === "doctor") return doctor(args, ui);
   throw new Error(`Unknown command: ${command}`);
 }
 

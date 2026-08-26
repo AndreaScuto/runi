@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseDuration } from "./budget.js";
@@ -16,6 +17,9 @@ export interface GuidedTaskOptions {
   grill?: boolean;
   choose?: Choose;
   defaults?: RuniSettings;
+  confirmWorkspace?: (workingDirectory: string) => Promise<boolean>;
+  models?: (agent: Exclude<AgentKind, "command">, binary: string) => Promise<string[]>;
+  loading?: <T>(message: string, action: () => Promise<T>) => Promise<T>;
 }
 
 interface GrillQuestion {
@@ -91,8 +95,32 @@ function collectStrings(value: unknown, strings: string[]): void {
   }
 }
 
+function rawCommandList(value: string): string[] {
+  const commands: string[] = [];
+  let start = 0;
+  let depth = 0;
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index <= value.length; index += 1) {
+    const character = value[index] ?? ",";
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = "";
+    } else if (character === '"' || character === "'") quote = character;
+    else if ("([{".includes(character)) depth += 1;
+    else if (")]}".includes(character)) depth = Math.max(0, depth - 1);
+    else if (character === "," && depth === 0) {
+      const command = value.slice(start, index).trim().replace(/^(["'])(.*)\1$/, "$2");
+      if (command) commands.push(command);
+      start = index + 1;
+    }
+  }
+  return commands;
+}
+
 function markedJson(output: string, marker: string): unknown {
-  const strings = [output];
+  const strings: string[] = [];
   for (const line of output.split(/\r?\n/)) {
     try {
       collectStrings(JSON.parse(line) as unknown, strings);
@@ -100,15 +128,41 @@ function markedJson(output: string, marker: string): unknown {
       // Provider output can mix JSON events with plain text.
     }
   }
+  strings.push(output);
   for (const text of strings) {
-    for (const line of text.split(/\r?\n/)) {
-      const index = line.indexOf(`${marker}=`);
-      if (index < 0) continue;
-      try {
-        return JSON.parse(line.slice(index + marker.length + 1));
-      } catch {
-        // Keep looking in case an earlier provider event contained a partial response.
+    let markerIndex = text.indexOf(`${marker}=`);
+    while (markerIndex >= 0) {
+      const rest = text.slice(markerIndex + marker.length + 1);
+      const start = rest.search(/[\[{]/);
+      if (start >= 0) {
+        let depth = 0;
+        let quoted = false;
+        let escaped = false;
+        for (let index = start; index < rest.length; index += 1) {
+          const character = rest[index]!;
+          if (quoted) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === '"') quoted = false;
+          } else if (character === '"') quoted = true;
+          else if (character === "[" || character === "{") depth += 1;
+          else if (character === "]" || character === "}") {
+            depth -= 1;
+            if (depth === 0) {
+              try {
+                return JSON.parse(rest.slice(start, index + 1));
+              } catch {
+                if (marker === "RUNI_VERIFICATION" && rest[start] === "[") {
+                  const commands = rawCommandList(rest.slice(start + 1, index));
+                  if (commands.length > 0) return commands;
+                }
+                break;
+              }
+            }
+          }
+        }
       }
+      markerIndex = text.indexOf(`${marker}=`, markerIndex + marker.length + 1);
     }
   }
   throw new Error(`AI response did not contain valid ${marker} JSON.`);
@@ -138,22 +192,24 @@ function verificationSuggestions(output: string): string[] {
   return commands;
 }
 
-function analysisInvocation(executor: ExecutorConfig, prompt: string): { binary: string; args: string[]; env: NodeJS.ProcessEnv } {
+function analysisInvocation(executor: ExecutorConfig, prompt: string, inspectWorkspace: boolean): { binary: string; args: string[]; env: NodeJS.ProcessEnv } {
   const model = executor.model === undefined ? [] : ["--model", executor.model];
   if (executor.kind === "opencode") {
     return {
       binary: executor.binary ?? "opencode",
-      args: ["run", "--format", "json", "--agent", "explore", ...model, prompt],
+      args: ["run", "--format", "json", ...model, prompt],
       env: {
         ...process.env,
-        OPENCODE_PERMISSION: JSON.stringify({ "*": "deny", read: "allow", glob: "allow", grep: "allow", list: "allow" }),
+        OPENCODE_PERMISSION: JSON.stringify(inspectWorkspace
+          ? { "*": "deny", read: "allow", glob: "allow", grep: "allow", list: "allow" }
+          : { "*": "deny" }),
       },
     };
   }
   if (executor.kind === "codex") {
     return {
       binary: executor.binary ?? "codex",
-      args: ["exec", "--sandbox", "read-only", "--color", "never", "--json", ...model, prompt],
+      args: ["exec", "--sandbox", "read-only", "--skip-git-repo-check", "--color", "never", "--json", ...model, prompt],
       env: { ...process.env },
     };
   }
@@ -168,7 +224,7 @@ function analysisInvocation(executor: ExecutorConfig, prompt: string): { binary:
 }
 
 async function askAgent(executor: ExecutorConfig, workingDirectory: string, prompt: string): Promise<string> {
-  const invocation = analysisInvocation(executor, prompt);
+  const invocation = analysisInvocation(executor, prompt, existsSync(join(workingDirectory, ".git")));
   const binary = resolveExecutable(invocation.binary, { currentDirectory: workingDirectory }) ?? invocation.binary;
   const session = new ProcessWorkerSession(binary, invocation.args, {
     cwd: workingDirectory,
@@ -183,13 +239,15 @@ async function askAgent(executor: ExecutorConfig, workingDirectory: string, prom
   return result.output;
 }
 
-async function grillGoal(goal: string, executor: ExecutorConfig, workingDirectory: string, ask: Ask, choose?: Choose): Promise<string> {
-  const output = await askAgent(executor, workingDirectory, [
-    "Inspect this repository without modifying it. Turn the short job into 2-5 high-value implementation questions.",
+async function grillGoal(goal: string, executor: ExecutorConfig, workingDirectory: string, ask: Ask, choose?: Choose, loading?: GuidedTaskOptions["loading"]): Promise<string> {
+  const request = () => askAgent(executor, workingDirectory, [
+    "Turn the short job into 2-5 high-value implementation questions without modifying files.",
+    "The working directory may be non-Git or empty; still answer from the job. Use repository context only when it is available.",
     "Each question must offer 2-4 concrete, mutually exclusive implementation choices.",
     `Job: ${goal}`,
     "Return exactly one line and no Markdown: RUNI_GRILL=[{\"question\":\"...\",\"options\":[\"...\",\"...\"]}]",
   ].join("\n"));
+  const output = loading ? await loading("Leo is refining the job", request) : await request();
   const decisions: string[] = [];
   for (const item of grillQuestions(output)) {
     let selected: string;
@@ -228,7 +286,7 @@ async function editSuggestions(ask: Ask, suggestions: string[], choose?: Choose)
   return commands.length > 0 ? commands : manualVerification(ask);
 }
 
-async function verificationPolicy(goal: string, executor: ExecutorConfig, workingDirectory: string, ask: Ask, choose?: Choose, initial: "manual" | "ai" = "manual"): Promise<string[]> {
+async function verificationPolicy(goal: string, executor: ExecutorConfig, workingDirectory: string, ask: Ask, choose?: Choose, initial: "manual" | "ai" = "manual", loading?: GuidedTaskOptions["loading"]): Promise<string[]> {
   while (true) {
     const defaultSource = executor.kind === "command" ? "manual" : initial;
     const source = choose
@@ -237,12 +295,14 @@ async function verificationPolicy(goal: string, executor: ExecutorConfig, workin
     if (source === "manual") return manualVerification(ask);
     if (source !== "ai" || executor.kind === "command") continue;
     try {
-      const output = await askAgent(executor, workingDirectory, [
-        "Inspect this repository without modifying it. Suggest deterministic, non-destructive commands that independently verify the job.",
+      const request = () => askAgent(executor, workingDirectory, [
+        "Suggest deterministic, non-destructive commands that independently verify the job without modifying files.",
+        "The working directory may be non-Git or empty; still answer from the job. Use repository context only when it is available.",
         "Use existing local project tools, avoid network calls and AI-based checks, and return only commands that can run from the repository root.",
         `Job:\n${goal}`,
         "Return exactly one line and no Markdown: RUNI_VERIFICATION=[\"command 1\",\"command 2\"]",
       ].join("\n"));
+      const output = loading ? await loading("Leo is designing verification", request) : await request();
       return editSuggestions(ask, verificationSuggestions(output), choose);
     } catch (error) {
       await ask(`AI suggestion unavailable: ${error instanceof Error ? error.message : String(error)} Press Enter for manual verification: `);
@@ -264,16 +324,30 @@ export async function createGuidedTask(goal: string, workingDirectory: string, a
     const defaultBinary = sameAgent ? defaults.binary : undefined;
     const defaultModel = sameAgent ? defaults.model : undefined;
     const binary = (await ask(`Executable override (${defaultBinary ?? agent}): `)).trim() || defaultBinary;
-    const model = (await ask(`Model override (${defaultModel ?? "agent default"}): `)).trim() || defaultModel;
+    if (agent === "codex" && options.confirmWorkspace && !await options.confirmWorkspace(workingDirectory)) {
+      throw new Error("Codex workspace trust was not granted.");
+    }
+    let model: string | undefined;
+    if (options.choose && options.models) {
+      const discovered = await options.models(agent, binary ?? agent);
+      const choices = ["Agent default", ...new Set(discovered), "Enter model manually…"];
+      const initial = defaultModel && choices.includes(defaultModel) ? defaultModel : "Agent default";
+      const selected = await options.choose("Model", choices, initial);
+      model = selected === "Enter model manually…"
+        ? (await ask(`Model override (${defaultModel ?? "agent default"}): `)).trim() || defaultModel
+        : selected === "Agent default" ? undefined : selected;
+    } else {
+      model = (await ask(`Model override (${defaultModel ?? "agent default"}): `)).trim() || defaultModel;
+    }
     if (binary) executor.binary = binary;
     if (model) executor.model = model;
   }
-  const refinedGoal = options.grill === true ? await grillGoal(goal, executor, workingDirectory, ask, options.choose) : goal;
+  const refinedGoal = options.grill === true ? await grillGoal(goal, executor, workingDirectory, ask, options.choose, options.loading) : goal;
   const budget = {
     maxAttempts: await attempts(ask, options.choose, defaults.maxAttempts),
     wallTime: await wallTime(ask, options.choose, defaults.wallTime),
   };
-  const verification = await verificationPolicy(refinedGoal, executor, workingDirectory, ask, options.choose, defaults.verificationPolicy);
+  const verification = await verificationPolicy(refinedGoal, executor, workingDirectory, ask, options.choose, defaults.verificationPolicy, options.loading);
   const directory = join(workingDirectory, ".runi", "tasks");
   await mkdir(directory, { recursive: true });
   const path = join(directory, `guided-${randomUUID()}.json`);

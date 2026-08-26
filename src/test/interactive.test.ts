@@ -102,3 +102,24 @@ test("entering slash alone opens the command picker", async () => {
   assert.equal(await runInteractive({ dispatch: async () => 0, jobs: () => [] }, ui), 0);
   assert.deepEqual(selected, ["Slash commands"]);
 });
+
+test("commands with observable wait time use the loading indicator", async () => {
+  const commands = ["/jobs", "/exit"];
+  const loading: string[] = [];
+  const ui = {
+    brand() {},
+    command: async () => commands.shift(),
+    choose: async () => undefined,
+    input: async () => undefined,
+    info() {},
+    error: (message: string) => assert.fail(message),
+    close() {},
+    loading: async <T>(message: string, action: () => Promise<T>) => {
+      loading.push(message);
+      return action();
+    },
+  } as unknown as InteractiveUi;
+
+  assert.equal(await runInteractive({ dispatch: async () => 0, jobs: () => [] }, ui), 0);
+  assert.deepEqual(loading, ["Loading jobs"]);
+});

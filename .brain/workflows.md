@@ -5,7 +5,7 @@
 - For any code change, run `pnpm run check`.
 - For lifecycle, storage, adapter, command-launch, or recovery changes, also run the CLI end-to-end in a disposable directory and confirm terminal state plus persisted verification evidence.
 - For database changes, test both a new database and an existing compatible database. Prefer additive migrations; require explicit rationale and a recovery plan for destructive ones.
-- For benchmark protocol or reporting changes, first use the deterministic paired test harness. Run paid or rate-limited model benchmarks only when fresh empirical results are part of the task, and retain raw JSON/CSV/log artifacts with the report.
+- The normal regression suite may exercise benchmark code with local fake workers, but never run `runi-benchmark` or provider-backed benchmark scenarios unless the user explicitly asks for benchmark results. When requested, retain raw JSON/CSV/log artifacts with the report.
 
 ## Maintain durable knowledge
 

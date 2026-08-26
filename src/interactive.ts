@@ -1,5 +1,5 @@
 import { createInterface, emitKeypressEvents } from "node:readline";
-import { isCancel, log, note, select, text } from "@clack/prompts";
+import { autocomplete, box, isCancel, log, note, select, spinner, text } from "@clack/prompts";
 
 const RESET = "\x1b[0m";
 const LEO_YELLOW = "\x1b[38;2;255;192;0m";
@@ -30,6 +30,7 @@ export interface InteractiveUi {
   input(message: string, placeholder?: string): Promise<string | undefined>;
   info(message: string, title?: string): void;
   error(message: string): void;
+  loading?<T>(message: string, action: () => Promise<T>): Promise<T>;
   close(): void;
 }
 
@@ -115,16 +116,21 @@ export function readTerminalCommand(
 function terminalUi(): InteractiveUi {
   return {
     brand() {
-      console.log(`${accent(LEO_FACE)}\n${accent("Runi 0.2 · Leo is supervising")}\n`);
+      box(`${accent(LEO_FACE)}\n\n${accent("Runi 0.2")} · durable, verified agent work`, "Leo is supervising", {
+        withGuide: false,
+        formatBorder: accent,
+      });
     },
     command: () => readTerminalCommand(),
     async choose(message, choices, initialValue) {
-      const answer = await select({
+      const prompt = choices.length > 8 ? autocomplete : select;
+      const answer = await prompt({
         message: accent(message),
         options: brandedChoices(choices),
         initialValue,
         maxItems: 8,
         withGuide: false,
+        showInstructions: false,
       });
       return isCancel(answer) ? undefined : answer;
     },
@@ -141,6 +147,18 @@ function terminalUi(): InteractiveUi {
     },
     error(message) {
       log.error(message, { withGuide: false });
+    },
+    async loading(message, action) {
+      const indicator = spinner({ withGuide: false, styleFrame: accent });
+      indicator.start(message);
+      try {
+        const result = await action();
+        indicator.stop(`${message} · done`);
+        return result;
+      } catch (error) {
+        indicator.error(`${message} · failed`);
+        throw error;
+      }
     },
     close() {
       console.log(accent("Leo is off duty. See you soon."));
@@ -181,6 +199,17 @@ function lineUi(): InteractiveUi {
     error(message) {
       console.error(`runi: ${message}`);
     },
+    async loading(message, action) {
+      console.log(`\n… ${message}`);
+      try {
+        const result = await action();
+        console.log(`✓ ${message}`);
+        return result;
+      } catch (error) {
+        console.log(`✗ ${message}`);
+        throw error;
+      }
+    },
     close() {
       lines.close();
       console.log(accent("Leo is off duty. See you soon."));
@@ -192,9 +221,10 @@ export function createInteractiveUi(): InteractiveUi {
   return process.stdin.isTTY && process.stdout.isTTY ? terminalUi() : lineUi();
 }
 
-async function dispatch(actions: InteractiveActions, ui: InteractiveUi, argv: string[]): Promise<void> {
+async function dispatch(actions: InteractiveActions, ui: InteractiveUi, argv: string[], loadingMessage?: string): Promise<void> {
   try {
-    const code = await actions.dispatch(argv, ui);
+    const action = () => actions.dispatch(argv, ui);
+    const code = loadingMessage && ui.loading ? await ui.loading(loadingMessage, action) : await action();
     if (code !== 0) ui.error(`Operation ended with exit code ${code}.`);
   } catch (error) {
     ui.error(error instanceof Error ? error.message : String(error));
@@ -230,7 +260,7 @@ export async function runInteractive(actions: InteractiveActions, ui = createInt
         continue;
       }
       if (command === "/jobs") {
-        await dispatch(actions, ui, ["status"]);
+        await dispatch(actions, ui, ["status"], "Loading jobs");
         continue;
       }
       if (command === "/settings") {
@@ -254,7 +284,7 @@ export async function runInteractive(actions: InteractiveActions, ui = createInt
       if (["/inspect", "/logs", "/pause", "/resume", "/stop"].includes(command)) {
         const operation = command.slice(1);
         const jobId = await selectedJob(actions, ui, operation);
-        if (jobId) await dispatch(actions, ui, [operation, jobId]);
+        if (jobId) await dispatch(actions, ui, [operation, jobId], operation === "logs" || operation === "inspect" ? "Loading job" : "Updating job");
         continue;
       }
       if (!command.startsWith("/")) {

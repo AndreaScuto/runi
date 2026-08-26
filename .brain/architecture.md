@@ -20,7 +20,9 @@ The first product boundary is local and single-worker. Worker execution is CLI-a
 
 Adapters must use each CLI's non-interactive mode without bypassing its sandbox or permission system. A worker blocked by vendor policy fails normally and enters Runi recovery; adapter convenience must not expand host authority or weaken the verification boundary.
 
-Authentication belongs to the selected coding CLI. Runi may resolve and preflight an executable and persist its absolute path, but it must never copy, normalize, or store provider credentials or API keys. Diagnostic status comes from each CLI's own non-interactive authentication command; login and secret storage remain outside Runi.
+Authentication belongs to the selected coding CLI. Runi may resolve and preflight an executable, persist its absolute path, and launch that CLI's native login with inherited terminal I/O; it must never read, copy, normalize, or store provider credentials or API keys. Secret storage remains outside Runi.
+
+Workspace approval is explicit during interactive Codex task authoring. Runi may use the vendor-supported non-Git execution flag after approval, but it must not alter global trust configuration or weaken the agent sandbox.
 
 Persistence favors an append-only evidence trail and non-destructive compatibility with existing local databases. Obsolete legacy tables may remain harmlessly; migrations must not erase a user's job history merely to make the schema tidy.
 

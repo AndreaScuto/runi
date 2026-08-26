@@ -18,7 +18,7 @@ export class CodexAdapter implements AgentAdapter {
 }
 
 export function codexInvocation(job: Job, context: string): { binary: string; args: string[] } {
-  const args = ["exec", "--approve-for-me", "--color", "never", "--json"];
+  const args = ["exec", "--approve-for-me", "--skip-git-repo-check", "--color", "never", "--json"];
   if (job.definition.executor.model !== undefined) args.push("--model", job.definition.executor.model);
   args.push(workerPrompt(job, context));
   return { binary: job.definition.executor.binary ?? "codex", args };
