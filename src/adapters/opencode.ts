@@ -1,15 +1,19 @@
 import type { AgentAdapter, Job, WorkerSession } from "../domain.js";
+import { needsWindowsShell, resolveExecutable } from "../agents.js";
 import { ProcessWorkerSession } from "./process.js";
+
+export { needsWindowsShell } from "../agents.js";
 
 export class OpenCodeAdapter implements AgentAdapter {
   readonly kind = "opencode" as const;
 
   async start(job: Job, context: string): Promise<WorkerSession> {
     const invocation = openCodeInvocation(job, context);
-    return new ProcessWorkerSession(invocation.binary, invocation.args, {
+    const binary = resolveExecutable(invocation.binary) ?? invocation.binary;
+    return new ProcessWorkerSession(binary, invocation.args, {
       cwd: job.definition.workingDirectory,
       env: { ...process.env, RUNI_JOB_ID: job.id, RUNI_ATTEMPT: String(job.attempts) },
-      shell: needsWindowsShell(invocation.binary),
+      shell: needsWindowsShell(binary),
     });
   }
 }
@@ -17,11 +21,6 @@ export class OpenCodeAdapter implements AgentAdapter {
 export interface OpenCodeInvocation {
   binary: string;
   args: string[];
-}
-
-/** Windows package-manager shims need cmd.exe; native executables do not. */
-export function needsWindowsShell(binary: string): boolean {
-  return process.platform === "win32" && /\.(?:cmd|bat)$/i.test(binary);
 }
 
 /**

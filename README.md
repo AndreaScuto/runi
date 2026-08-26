@@ -23,21 +23,28 @@ Runi adds the control layer around an existing agent:
 
 Runi is local-first, CLI-first, and intentionally single-worker today.
 
-## Install from GitHub Packages
+## Install
 
-Starting with the stable v0.2 release, GitHub Releases publish the scoped npm package `@andreascuto/runi` to GitHub Packages after the full test suite passes.
-
-GitHub requires authentication even when installing a public npm package:
+Starting with the stable v0.2 release, Runi is a public npm package. No GitHub login or package token is required:
 
 ```bash
-npm login --scope=@andreascuto --auth-type=legacy --registry=https://npm.pkg.github.com
 npm install --global @andreascuto/runi
 runi
 ```
 
-Use a GitHub personal access token (classic) with `read:packages` as the password. Source archives remain attached automatically to each GitHub Release.
+`runi` opens a persistent terminal session led by Leo and immediately asks what job to run. Describe the job to enter the standard guided flow, or enter `/` to open the command picker. Runi presents selectable choices for agents, budgets, policies, persisted jobs, and AI suggestions; typing is reserved for goals, commands, models, and custom answers.
 
-Running `runi` opens Leo's interactive home screen, where you can create a guided job, grill an idea, start a task file, or inspect existing jobs. Direct commands such as `runi start` and `runi status` remain available for scripts and experienced users.
+```text
+   / \__
+  (    @\___
+  /         O
+ /   (_____/
+/_____/   U
+
+What should Runi do? Build a health endpoint and its tests
+```
+
+Use `/help` inside the session for every operation and `/exit` when Leo can clock off. `/doctor` checks every supported coding agent; `/settings` disables unavailable agents and saves the selected executable's absolute path with the workspace defaults under `.runi/`. Direct commands such as `runi start` and `runi status` remain stable for scripts and experienced users.
 
 ## Try it in two minutes
 
@@ -110,7 +117,7 @@ Prefer prompts? Give Runi only the job. Guided mode asks for the worker, model, 
 runi start --guided "Add a /health endpoint and its tests" --workdir /path/to/repository
 ```
 
-Choose `manual` to enter verification commands yourself or `ai` to ask the selected coding agent for suggestions. Every AI command is shown before execution: press Enter to keep it, type `-` to remove it, type a replacement to edit it, and add more commands at the end.
+Choose `manual` to enter verification commands yourself or `ai` to ask the selected coding agent for suggestions. In the interactive session, every AI command has selectable `Keep`, `Edit`, and `Remove` actions; edited and additional commands remain free text.
 
 For a short or ambiguous idea, grill mode asks the selected agent to propose concrete implementation alternatives before creating the task:
 
@@ -118,7 +125,7 @@ For a short or ambiguous idea, grill mode asks the selected agent to propose con
 runi start --grill "Add durable caching" --workdir /path/to/repository
 ```
 
-Answer each question with an option number or your own text. Runi persists the original job plus your decisions in the generated goal so the worker receives the intended implementation direction. AI guidance runs with read-only analysis settings; it remains untrusted advice, never completion evidence.
+Select an answer for each question or choose `Custom answer…`. Runi persists the original job plus your decisions in the generated goal so the worker receives the intended implementation direction. AI guidance runs with read-only analysis settings; it remains untrusted advice, never completion evidence.
 
 A Markdown file can be used as the goal when the completion contract is supplied on the command line:
 
@@ -133,7 +140,15 @@ pnpm run start -- start task.md \
 
 ## Choose your coding agent
 
-The selected CLI must already be installed and authenticated. Runi uses the same lifecycle, budgets, recovery context, and independent verification for every adapter.
+The selected CLI must already be installed and authenticated. Check the setup before creating a job:
+
+```bash
+runi doctor
+```
+
+Each agent is reported as `READY`, `NOT FOUND`, `NOT AUTHENTICATED`, or `NOT EXECUTABLE`, with its resolved path or a corrective action. Discovery supports native executables and package-manager shims on Windows (`.exe`, `.cmd`, `.bat`, npm, pnpm, WinGet), macOS, and Linux.
+
+Runi reuses the login already owned by OpenCode, Codex CLI, or Claude Code. It never asks for, reads, or stores an API key. Run the agent's own login command when `/doctor` reports an authentication problem. Environment-based credentials and free models remain the selected CLI's responsibility.
 
 | `--agent` | Worker CLI | Default executable |
 |-----------|------------|--------------------|
@@ -146,7 +161,7 @@ runi start task.json --agent codex --model <model-id>
 runi start task.json --agent claude --model <model-id>
 ```
 
-Use `--binary <path>` for a non-standard installation. The older `--opencode-binary` and `--opencode-model` flags remain accepted for v0.1 compatibility. Agent selection is explicit per job; Runi does not silently switch provider or model.
+Use `--binary <path>` for a non-standard installation. `/settings` resolves normal global installs automatically and persists the absolute executable path, so subsequent jobs do not depend on ambiguous shell lookup. The older `--opencode-binary` and `--opencode-model` flags remain accepted for v0.1 compatibility. Agent selection is explicit per job; Runi does not silently switch provider or model.
 
 The adapters do not bypass vendor safety controls. Codex runs with a writable-workspace sandbox and no interactive approval prompts; Claude Code runs in `acceptEdits` mode. Project or user settings may restrict additional shell commands, while Runi's verification still runs independently.
 
@@ -169,6 +184,8 @@ runi stop <job-id>
 
 Leo does not write code and does not make lifecycle decisions. He simply shows that Runi is still supervising the active job.
 
+His terminal face and sunny `#ffc000` accent make supervision easy to spot without turning status into decoration. Yellow means Runi; success and failure keep their own semantic colors.
+
 In an interactive terminal, Leo's line updates in place with state, attempt budget, and elapsed time. In logs and CI, Runi prints one stable supervision line instead of terminal animation.
 
 If Leo says `WORKING`, the worker is working. If Runi says `COMPLETE`, the evidence passed. Leo never guesses.
@@ -185,6 +202,8 @@ runi start task.md \
 ```
 
 Runi provides `RUNI_JOB_ID`, `RUNI_GOAL`, `RUNI_CONTEXT`, and `RUNI_ATTEMPT` to the command environment.
+
+This is also the escape hatch for another globally installed CLI: choose `command` and provide its normal non-interactive command line. Runi does not guess whether an arbitrary executable is a coding agent or how it authenticates.
 
 ## Evidence and recovery
 
@@ -237,7 +256,7 @@ pnpm test
 pnpm run check
 ```
 
-Runi uses TypeScript, Node.js, built-in `node:sqlite`, and the Node test runner. There are no runtime dependencies.
+Runi uses TypeScript, Node.js, built-in `node:sqlite`, the Node test runner, and Clack for accessible terminal selection prompts.
 
 ## License
 

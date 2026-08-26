@@ -20,10 +20,12 @@ The first product boundary is local and single-worker. Worker execution is CLI-a
 
 Adapters must use each CLI's non-interactive mode without bypassing its sandbox or permission system. A worker blocked by vendor policy fails normally and enters Runi recovery; adapter convenience must not expand host authority or weaken the verification boundary.
 
+Authentication belongs to the selected coding CLI. Runi may resolve and preflight an executable and persist its absolute path, but it must never copy, normalize, or store provider credentials or API keys. Diagnostic status comes from each CLI's own non-interactive authentication command; login and secret storage remain outside Runi.
+
 Persistence favors an append-only evidence trail and non-destructive compatibility with existing local databases. Obsolete legacy tables may remain harmlessly; migrations must not erase a user's job history merely to make the schema tidy.
 
 The generic command executor is a deterministic seam for integration tests and non-agent automation, not a second agent framework.
 
 ## Brand boundary
 
-Leo 🐕 is Runi's mascot and the visible sign that a job is being supervised. Leo belongs in CLI status, documentation, community, and future presentation layers; Leo is not a runtime component and never owns lifecycle decisions. Any Leo UI must reflect persisted Runi state rather than inventing a second status model.
+Leo 🐕 is Runi's mascot and the visible sign that a job is being supervised. His stylized dog face and `#ffc000` accent are durable brand identifiers; yellow is a brand accent, while success and failure retain semantic status colors. Leo belongs in CLI status, documentation, community, and future presentation layers; Leo is not a runtime component and never owns lifecycle decisions. Any Leo UI must reflect persisted Runi state rather than inventing a second status model.

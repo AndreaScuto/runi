@@ -21,7 +21,8 @@
     "LICENSE"
   ],
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
   },
   "engines": {
     "node": ">=24.0.0"
@@ -33,6 +34,9 @@
     "prepack": "pnpm run build",
     "start": "node dist/cli.js",
     "benchmark": "node dist/benchmark/cli.js"
+  },
+  "dependencies": {
+    "@clack/prompts": "1.7.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

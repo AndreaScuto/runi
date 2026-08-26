@@ -4,14 +4,19 @@ import { join } from "node:path";
 import { parseDuration } from "./budget.js";
 import { ProcessWorkerSession } from "./adapters/process.js";
 import { needsWindowsShell } from "./adapters/opencode.js";
+import { resolveExecutable } from "./agents.js";
 import type { AgentKind, ExecutorConfig } from "./domain.js";
+import { DEFAULT_RUNI_SETTINGS, type RuniSettings } from "./settings.js";
 
 export type Ask = (question: string) => Promise<string>;
+export type Choose = (question: string, options: readonly string[], initialValue?: string) => Promise<string>;
 
 const AGENTS = new Set<AgentKind>(["opencode", "codex", "claude", "command"]);
 
-interface GuidedTaskOptions {
+export interface GuidedTaskOptions {
   grill?: boolean;
+  choose?: Choose;
+  defaults?: RuniSettings;
 }
 
 interface GrillQuestion {
@@ -19,9 +24,11 @@ interface GrillQuestion {
   options: string[];
 }
 
-async function chooseAgent(ask: Ask): Promise<AgentKind> {
+async function chooseAgent(ask: Ask, choose?: Choose, initial: AgentKind = "opencode"): Promise<AgentKind> {
   while (true) {
-    const answer = (await ask("Worker agent [opencode|codex|claude|command] (opencode): ")).trim() || "opencode";
+    const answer = choose
+      ? await choose("Worker agent", [...AGENTS], initial)
+      : (await ask(`Worker agent [opencode|codex|claude|command] (${initial}): `)).trim() || initial;
     if (AGENTS.has(answer as AgentKind)) return answer as AgentKind;
   }
 }
@@ -33,17 +40,30 @@ async function required(ask: Ask, question: string): Promise<string> {
   }
 }
 
-async function attempts(ask: Ask): Promise<number> {
+async function attempts(ask: Ask, choose?: Choose, initial = 3): Promise<number> {
   while (true) {
-    const answer = (await ask("Maximum attempts (3): ")).trim() || "3";
+    const text = String(initial);
+    const options = ["1", "2", "3", "5"];
+    if (!options.includes(text)) options.push(text);
+    options.push("Custom…");
+    const selected = choose ? await choose("Maximum attempts", options, text) : undefined;
+    const answer = selected === "Custom…" || selected === undefined
+      ? (await ask(`Maximum attempts (${text}): `)).trim() || text
+      : selected;
     const value = Number(answer);
     if (Number.isInteger(value) && value > 0) return value;
   }
 }
 
-async function wallTime(ask: Ask): Promise<string> {
+async function wallTime(ask: Ask, choose?: Choose, initial = "4h"): Promise<string> {
   while (true) {
-    const answer = (await ask("Wall-time budget (4h): ")).trim() || "4h";
+    const options = ["30m", "1h", "2h", "4h", "8h"];
+    if (!options.includes(initial)) options.push(initial);
+    options.push("Custom…");
+    const selected = choose ? await choose("Wall-time budget", options, initial) : undefined;
+    const answer = selected === "Custom…" || selected === undefined
+      ? (await ask(`Wall-time budget (${initial}): `)).trim() || initial
+      : selected;
     try {
       parseDuration(answer);
       return answer;
@@ -57,8 +77,8 @@ async function manualVerification(ask: Ask): Promise<string[]> {
   const commands: string[] = [];
   while (true) {
     const command = (await ask(commands.length === 0
-      ? "Verification command (required): "
-      : "Add another verification command (blank to finish): ")).trim();
+      ? "Verification shell command (for example: python hello.py): "
+      : "Add another verification shell command (blank to finish): ")).trim();
     if (!command && commands.length > 0) return commands;
     if (command) commands.push(command);
   }
@@ -134,7 +154,7 @@ function analysisInvocation(executor: ExecutorConfig, prompt: string): { binary:
   if (executor.kind === "codex") {
     return {
       binary: executor.binary ?? "codex",
-      args: ["exec", "--sandbox", "read-only", "--ask-for-approval", "never", "--color", "never", "--json", ...model, prompt],
+      args: ["exec", "--sandbox", "read-only", "--color", "never", "--json", ...model, prompt],
       env: { ...process.env },
     };
   }
@@ -150,17 +170,21 @@ function analysisInvocation(executor: ExecutorConfig, prompt: string): { binary:
 
 async function askAgent(executor: ExecutorConfig, workingDirectory: string, prompt: string): Promise<string> {
   const invocation = analysisInvocation(executor, prompt);
-  const session = new ProcessWorkerSession(invocation.binary, invocation.args, {
+  const binary = resolveExecutable(invocation.binary, { currentDirectory: workingDirectory }) ?? invocation.binary;
+  const session = new ProcessWorkerSession(binary, invocation.args, {
     cwd: workingDirectory,
     env: invocation.env,
-    shell: needsWindowsShell(invocation.binary),
+    shell: needsWindowsShell(binary),
   });
   const result = await session.result;
-  if (result.exitCode !== 0) throw new Error(`AI guidance failed with exit code ${result.exitCode}.`);
+  if (result.exitCode !== 0) {
+    const detail = result.output.trim();
+    throw new Error(`AI guidance failed${result.exitCode === -1 ? "" : ` with exit code ${result.exitCode}`}.${detail ? `\n${detail}` : ""}`);
+  }
   return result.output;
 }
 
-async function grillGoal(goal: string, executor: ExecutorConfig, workingDirectory: string, ask: Ask): Promise<string> {
+async function grillGoal(goal: string, executor: ExecutorConfig, workingDirectory: string, ask: Ask, choose?: Choose): Promise<string> {
   const output = await askAgent(executor, workingDirectory, [
     "Inspect this repository without modifying it. Turn the short job into 2-5 high-value implementation questions.",
     "Each question must offer 2-4 concrete, mutually exclusive implementation choices.",
@@ -169,21 +193,33 @@ async function grillGoal(goal: string, executor: ExecutorConfig, workingDirector
   ].join("\n"));
   const decisions: string[] = [];
   for (const item of grillQuestions(output)) {
-    const choices = item.options.map((option, index) => `  ${index + 1}) ${option}`).join("\n");
-    const answer = (await ask(`${item.question}\n${choices}\nChoice (number or custom answer, 1): `)).trim();
-    const selected = answer === "" ? item.options[0]! : Number.isInteger(Number(answer)) && Number(answer) >= 1 && Number(answer) <= item.options.length
-      ? item.options[Number(answer) - 1]!
-      : answer;
+    let selected: string;
+    if (choose) {
+      selected = await choose(item.question, [...item.options, "Custom answer…"], item.options[0]);
+      if (selected === "Custom answer…") selected = await required(ask, "Custom answer: ");
+    } else {
+      const choices = item.options.map((option, index) => `  ${index + 1}) ${option}`).join("\n");
+      const answer = (await ask(`${item.question}\n${choices}\nChoice (number or custom answer, 1): `)).trim();
+      selected = answer === "" ? item.options[0]! : Number.isInteger(Number(answer)) && Number(answer) >= 1 && Number(answer) <= item.options.length
+        ? item.options[Number(answer) - 1]!
+        : answer;
+    }
     decisions.push(`- ${item.question}: ${selected}`);
   }
   return `Original job:\n${goal}\n\nImplementation decisions:\n${decisions.join("\n")}`;
 }
 
-async function editSuggestions(ask: Ask, suggestions: string[]): Promise<string[]> {
+async function editSuggestions(ask: Ask, suggestions: string[], choose?: Choose): Promise<string[]> {
   const commands: string[] = [];
   for (const [index, suggestion] of suggestions.entries()) {
-    const answer = (await ask(`${index === 0 ? "AI verification suggestions\n" : ""}${index + 1}. ${suggestion}\nEdit (blank keeps it, - removes it): `)).trim();
-    if (answer !== "-") commands.push(answer || suggestion);
+    if (choose) {
+      const action = await choose(`Verification: ${suggestion}`, ["Keep", "Edit", "Remove"], "Keep");
+      if (action === "Keep") commands.push(suggestion);
+      if (action === "Edit") commands.push(await required(ask, "Replacement command: "));
+    } else {
+      const answer = (await ask(`${index === 0 ? "AI verification suggestions\n" : ""}${index + 1}. ${suggestion}\nEdit (blank keeps it, - removes it): `)).trim();
+      if (answer !== "-") commands.push(answer || suggestion);
+    }
   }
   while (true) {
     const command = (await ask("Add verification command (blank to finish): ")).trim();
@@ -193,9 +229,12 @@ async function editSuggestions(ask: Ask, suggestions: string[]): Promise<string[
   return commands.length > 0 ? commands : manualVerification(ask);
 }
 
-async function verificationPolicy(goal: string, executor: ExecutorConfig, workingDirectory: string, ask: Ask): Promise<string[]> {
+async function verificationPolicy(goal: string, executor: ExecutorConfig, workingDirectory: string, ask: Ask, choose?: Choose, initial: "manual" | "ai" = "manual"): Promise<string[]> {
   while (true) {
-    const source = (await ask(`Verification policy [manual${executor.kind === "command" ? "" : "|ai"}] (manual): `)).trim() || "manual";
+    const defaultSource = executor.kind === "command" ? "manual" : initial;
+    const source = choose
+      ? await choose("Verification policy", executor.kind === "command" ? ["manual"] : ["manual", "ai"], defaultSource)
+      : (await ask(`Verification policy [manual${executor.kind === "command" ? "" : "|ai"}] (${defaultSource}): `)).trim() || defaultSource;
     if (source === "manual") return manualVerification(ask);
     if (source !== "ai" || executor.kind === "command") continue;
     try {
@@ -205,7 +244,7 @@ async function verificationPolicy(goal: string, executor: ExecutorConfig, workin
         `Job:\n${goal}`,
         "Return exactly one line and no Markdown: RUNI_VERIFICATION=[\"command 1\",\"command 2\"]",
       ].join("\n"));
-      return editSuggestions(ask, verificationSuggestions(output));
+      return editSuggestions(ask, verificationSuggestions(output), choose);
     } catch (error) {
       await ask(`AI suggestion unavailable: ${error instanceof Error ? error.message : String(error)} Press Enter for manual verification: `);
       return manualVerification(ask);
@@ -214,20 +253,28 @@ async function verificationPolicy(goal: string, executor: ExecutorConfig, workin
 }
 
 export async function createGuidedTask(goal: string, workingDirectory: string, ask: Ask, options: GuidedTaskOptions = {}): Promise<string> {
-  const agent = await chooseAgent(ask);
+  const defaults = options.defaults ?? DEFAULT_RUNI_SETTINGS;
+  const agent = await chooseAgent(ask, options.choose, defaults.agent);
   if (options.grill === true && agent === "command") throw new Error("Grill mode requires OpenCode, Codex, or Claude Code.");
   const executor: ExecutorConfig = { kind: agent };
   if (agent === "command") {
-    executor.command = await required(ask, "Worker command: ");
+    const command = (await ask(`Worker command${defaults.agent === agent && defaults.command ? ` (${defaults.command})` : ""}: `)).trim();
+    executor.command = command || (defaults.agent === agent ? defaults.command : undefined) || await required(ask, "Worker command: ");
   } else {
-    const binary = (await ask(`Executable override (${agent}): `)).trim();
-    const model = (await ask("Model override (agent default): ")).trim();
+    const sameAgent = defaults.agent === agent;
+    const defaultBinary = sameAgent ? defaults.binary : undefined;
+    const defaultModel = sameAgent ? defaults.model : undefined;
+    const binary = (await ask(`Executable override (${defaultBinary ?? agent}): `)).trim() || defaultBinary;
+    const model = (await ask(`Model override (${defaultModel ?? "agent default"}): `)).trim() || defaultModel;
     if (binary) executor.binary = binary;
     if (model) executor.model = model;
   }
-  const refinedGoal = options.grill === true ? await grillGoal(goal, executor, workingDirectory, ask) : goal;
-  const budget = { maxAttempts: await attempts(ask), wallTime: await wallTime(ask) };
-  const verification = await verificationPolicy(refinedGoal, executor, workingDirectory, ask);
+  const refinedGoal = options.grill === true ? await grillGoal(goal, executor, workingDirectory, ask, options.choose) : goal;
+  const budget = {
+    maxAttempts: await attempts(ask, options.choose, defaults.maxAttempts),
+    wallTime: await wallTime(ask, options.choose, defaults.wallTime),
+  };
+  const verification = await verificationPolicy(refinedGoal, executor, workingDirectory, ask, options.choose, defaults.verificationPolicy);
   const directory = join(workingDirectory, ".runi", "tasks");
   await mkdir(directory, { recursive: true });
   const path = join(directory, `guided-${randomUUID()}.json`);

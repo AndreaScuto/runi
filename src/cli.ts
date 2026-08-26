@@ -15,6 +15,9 @@ import { RuniStore } from "./storage.js";
 import { loadTaskDefinition, type StartOverrides } from "./task-file.js";
 import { Supervisor } from "./supervisor.js";
 import { createGuidedTask } from "./wizard.js";
+import { createInteractiveUi, runInteractive, type InteractiveJob, type InteractiveUi } from "./interactive.js";
+import { loadSettings, saveSettings, type RuniSettings } from "./settings.js";
+import { CODING_AGENTS, diagnoseAgent, type AgentDiagnostic } from "./agents.js";
 
 const CLI_OPTIONS = {
   agent: { type: "string" },
@@ -97,6 +100,17 @@ function printJob(job: Job): void {
   if (job.exitReason) console.log(`Reason      ${job.exitReason}`);
 }
 
+function printLatestFailure(store: RuniStore, jobId: string): void {
+  const events = store.getEvents(jobId, 20);
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.type !== "WORKER_FAILED") continue;
+    const detail = event.payload.detail;
+    if (typeof detail === "string" && detail.trim()) console.log(`Last worker failure\n${detail.trim()}`);
+    return;
+  }
+}
+
 function help(): void {
   console.log(`Runi 0.2 — durable execution for coding agents
 
@@ -110,6 +124,8 @@ Usage:
   runi pause <job-id> [--workdir <dir>]
   runi resume <job-id> [--workdir <dir>]
   runi stop <job-id> [--workdir <dir>]
+  runi settings [--workdir <dir>]
+  runi doctor [--workdir <dir>]
 
 Start options:
   --guided                      Prompt for settings and create a reusable task
@@ -123,10 +139,64 @@ Start options:
   --max-attempts <n>             Hard attempt budget
   --wall-time <duration>         Hard wall-time budget (for example: 90m)
   --workdir <dir>                Repository to supervise (default: current directory)
+
+Interactive:
+  Run \`runi\`, describe the job, or enter / to choose a slash command.
 `);
 }
 
-async function guidedTask(goal: string, workingDirectory: string, grill: boolean): Promise<string> {
+function diagnosticChoice(diagnostic: AgentDiagnostic) {
+  const detail = diagnostic.status === "READY"
+    ? diagnostic.binary
+    : `${diagnostic.status}: ${diagnostic.detail}`;
+  return {
+    value: diagnostic.agent,
+    label: diagnostic.agent,
+    ...(detail === undefined ? {} : { hint: detail }),
+    ...(diagnostic.status === "READY" ? {} : { disabled: true }),
+  };
+}
+
+async function agentDiagnostics(workingDirectory: string, current?: RuniSettings): Promise<AgentDiagnostic[]> {
+  return Promise.all(CODING_AGENTS.map((agent) => diagnoseAgent(agent, {
+    currentDirectory: workingDirectory,
+    ...(current?.agent === agent && current.binary ? { binary: current.binary } : {}),
+  })));
+}
+
+async function doctor(args: ParsedArguments): Promise<number> {
+  const workingDirectory = resolve(args.values.workdir ?? process.cwd());
+  const diagnostics = await agentDiagnostics(workingDirectory, loadSettings(workingDirectory));
+  console.log("AGENT      STATUS                 EXECUTABLE / ACTION");
+  for (const diagnostic of diagnostics) {
+    const detail = diagnostic.binary ?? diagnostic.detail;
+    console.log(`${diagnostic.agent.padEnd(10)} ${diagnostic.status.padEnd(22)} ${detail}`);
+    if (diagnostic.status !== "READY" && diagnostic.binary) console.log(`${"".padEnd(33)} ${diagnostic.detail}`);
+  }
+  console.log("\nRuni uses each CLI's existing login. It never reads or stores API keys.");
+  return 0;
+}
+
+async function guidedTask(goal: string, workingDirectory: string, grill: boolean, ui?: InteractiveUi): Promise<string> {
+  const defaults = loadSettings(workingDirectory);
+  if (ui) {
+    const ask = async (question: string): Promise<string> => {
+      const answer = await ui.input(question.replace(/:\s*$/, ""));
+      if (answer === undefined) throw new Error("Interactive task creation cancelled.");
+      return answer;
+    };
+    const path = await createGuidedTask(goal, workingDirectory, ask, {
+      grill,
+      defaults,
+      choose: async (question, options, initialValue) => {
+        const answer = await ui.choose(question, options.map((value) => ({ value, label: value })), initialValue);
+        if (answer === undefined) throw new Error("Interactive task creation cancelled.");
+        return answer;
+      },
+    });
+    console.log(`Saved reusable task to ${path}.`);
+    return path;
+  }
   const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
   const iterator = lines[Symbol.asyncIterator]();
   try {
@@ -135,7 +205,7 @@ async function guidedTask(goal: string, workingDirectory: string, grill: boolean
       const answer = await iterator.next();
       if (answer.done) throw new Error("Interactive input ended before the task was complete.");
       return answer.value;
-    }, { grill });
+    }, { grill, defaults });
     console.log(`Saved reusable task to ${path}.`);
     return path;
   } finally {
@@ -143,12 +213,68 @@ async function guidedTask(goal: string, workingDirectory: string, grill: boolean
   }
 }
 
-async function start(args: ParsedArguments): Promise<number> {
+async function settings(args: ParsedArguments, ui?: InteractiveUi): Promise<number> {
+  const workingDirectory = resolve(args.values.workdir ?? process.cwd());
+  const prompt = ui ?? createInteractiveUi();
+  const ownsPrompt = ui === undefined;
+  const current = loadSettings(workingDirectory);
+  const choose = async (message: string, values: readonly string[], initial: string): Promise<string> => {
+    const answer = await prompt.choose(message, values.map((value) => ({ value, label: value })), initial);
+    if (answer === undefined) throw new Error("Settings cancelled.");
+    return answer;
+  };
+  try {
+    const diagnostics = await agentDiagnostics(workingDirectory, current);
+    const choices = [
+      ...diagnostics.map(diagnosticChoice),
+      { value: "command", label: "command", hint: "Run any installed CLI or local command" },
+    ];
+    const ready = new Set(diagnostics.filter((diagnostic) => diagnostic.status === "READY").map((diagnostic) => diagnostic.agent));
+    const initial = current.agent === "command" || ready.has(current.agent as typeof CODING_AGENTS[number])
+      ? current.agent
+      : diagnostics.find((diagnostic) => diagnostic.status === "READY")?.agent ?? "command";
+    const selected = await prompt.choose("Default worker agent", choices, initial);
+    if (selected === undefined) throw new Error("Settings cancelled.");
+    const agent = selected as RuniSettings["agent"];
+    const next: RuniSettings = {
+      agent,
+      maxAttempts: current.maxAttempts,
+      wallTime: current.wallTime,
+      verificationPolicy: current.verificationPolicy,
+    };
+    if (agent === "command") {
+      const command = await prompt.input("Default worker command", current.command ?? "Required for command jobs");
+      if (!command) throw new Error("A default worker command is required.");
+      next.command = command;
+      next.verificationPolicy = "manual";
+    } else {
+      const model = await prompt.input("Default model (blank uses agent default)", current.agent === agent ? current.model : undefined);
+      if (model) next.model = model;
+      const diagnostic = diagnostics.find((entry) => entry.agent === agent);
+      if (diagnostic?.status !== "READY" || !diagnostic.binary) throw new Error(`${agent} is not ready: ${diagnostic?.detail ?? "executable unavailable"}`);
+      next.binary = diagnostic.binary;
+    }
+    const attempt = await choose("Default maximum attempts", ["1", "2", "3", "5", "Custom…"], String(current.maxAttempts));
+    next.maxAttempts = Number(attempt === "Custom…" ? await prompt.input("Maximum attempts", String(current.maxAttempts)) : attempt);
+    if (!Number.isInteger(next.maxAttempts) || next.maxAttempts < 1) throw new Error("Maximum attempts must be a positive integer.");
+    const wall = await choose("Default wall-time budget", ["30m", "1h", "2h", "4h", "8h", "Custom…"], current.wallTime);
+    next.wallTime = wall === "Custom…" ? await prompt.input("Wall-time budget", current.wallTime) ?? "" : wall;
+    if (!next.wallTime) throw new Error("Wall-time budget is required.");
+    if (agent !== "command") next.verificationPolicy = await choose("Default verification policy", ["manual", "ai"], current.verificationPolicy) as RuniSettings["verificationPolicy"];
+    const path = saveSettings(workingDirectory, next);
+    prompt.info(`Agent ${next.agent} · attempts ${next.maxAttempts} · wall time ${next.wallTime}\n${path}`, "Defaults saved");
+    return 0;
+  } finally {
+    if (ownsPrompt) prompt.close();
+  }
+}
+
+async function start(args: ParsedArguments, ui?: InteractiveUi): Promise<number> {
   const taskOrGoal = requirePositional(args, 1, "runi start <task.md|task.json> | runi start --guided|--grill \"<job>\"");
   const workingDirectory = resolve(args.values.workdir ?? process.cwd());
   if (!existsSync(workingDirectory)) throw new Error(`Working directory does not exist: ${workingDirectory}`);
   const guided = args.values.guided === true || args.values.grill === true;
-  const task = guided ? await guidedTask(taskOrGoal, workingDirectory, args.values.grill === true) : taskOrGoal;
+  const task = guided ? await guidedTask(taskOrGoal, workingDirectory, args.values.grill === true, ui) : taskOrGoal;
   const maxAttemptsText = args.values["max-attempts"];
   const parsedAttempts = maxAttemptsText === undefined ? undefined : Number(maxAttemptsText);
   if (parsedAttempts !== undefined && (!Number.isInteger(parsedAttempts) || parsedAttempts < 1)) {
@@ -184,6 +310,7 @@ async function start(args: ParsedArguments): Promise<number> {
     console.log(`Started durable job ${job.id}. State is persisted in ${databasePath(workingDirectory)}.`);
     const completed = await superviseWithLeo(store, job.id);
     printJob(completed);
+    if (completed.status !== "complete") printLatestFailure(store, completed.id);
     return completed.status === "complete" ? 0 : 1;
   } finally {
     store.close();
@@ -203,6 +330,7 @@ async function resume(args: ParsedArguments): Promise<number> {
     console.log(`Resuming ${job.id} from ${job.status}.`);
     const completed = await superviseWithLeo(store, job.id);
     printJob(completed);
+    if (completed.status !== "complete") printLatestFailure(store, completed.id);
     return completed.status === "complete" ? 0 : 1;
   } finally {
     store.close();
@@ -289,7 +417,7 @@ function stop(args: ParsedArguments): number {
   }
 }
 
-export async function run(argv: string[]): Promise<number> {
+export async function run(argv: string[], ui?: InteractiveUi): Promise<number> {
   const args = parseArguments(argv);
   const command = args.positionals[0];
   if (command === "help" || args.values.help === true) {
@@ -297,62 +425,32 @@ export async function run(argv: string[]): Promise<number> {
     return 0;
   }
   if (command === undefined) return home();
-  if (command === "start") return start(args);
+  if (command === "start") return start(args, ui);
   if (command === "status") return status(args);
   if (command === "inspect") return inspect(args);
   if (command === "logs") return logs(args);
   if (command === "pause") return pause(args);
   if (command === "resume") return resume(args);
   if (command === "stop") return stop(args);
+  if (command === "settings") return settings(args, ui);
+  if (command === "agents" || command === "doctor") return doctor(args);
   throw new Error(`Unknown command: ${command}`);
 }
 
 async function home(): Promise<number> {
-  console.log(`Runi 0.2
-🐕 Leo is ready to supervise.
-
-1  Create a guided job
-2  Grill an idea with AI
-3  Start from a task file
-4  Show jobs
-5  Help
-0  Exit
-`);
-  const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
-  const iterator = lines[Symbol.asyncIterator]();
-  const ask = async (question: string): Promise<string | undefined> => {
-    process.stdout.write(question);
-    const answer = await iterator.next();
-    return answer.done ? undefined : answer.value.trim();
-  };
-  let nextArguments: string[] | undefined;
-  try {
-    while (nextArguments === undefined) {
-      const choice = await ask("Choose: ");
-      if (choice === undefined || choice === "0") return 0;
-      if (choice === "1" || choice === "2" || choice === "3") {
-        const value = await ask(choice === "3" ? "Task file: " : "What should Runi build? ");
-        if (!value) {
-          console.log("Nothing started.");
-          return 0;
-        }
-        nextArguments = choice === "1"
-          ? ["start", value, "--guided"]
-          : choice === "2"
-            ? ["start", value, "--grill"]
-            : ["start", value];
-      } else if (choice === "4") {
-        nextArguments = ["status"];
-      } else if (choice === "5") {
-        nextArguments = ["help"];
-      } else {
-        console.log("Choose a number from 0 to 5.");
-      }
+  const jobs = (): InteractiveJob[] => {
+    const store = new RuniStore(databasePath(process.cwd()));
+    try {
+      return store.listJobs().map((job) => ({
+        id: job.id,
+        label: `${job.status.toUpperCase()} · ${job.definition.goal}`,
+        hint: shortId(job.id),
+      }));
+    } finally {
+      store.close();
     }
-  } finally {
-    lines.close();
-  }
-  return run(nextArguments);
+  };
+  return runInteractive({ dispatch: (argv, interactiveUi) => run(argv, interactiveUi), jobs }, createInteractiveUi());
 }
 
 function isDirectExecution(): boolean {

@@ -1,5 +1,6 @@
 import type { AgentAdapter, Job, WorkerSession } from "../domain.js";
-import { needsWindowsShell, openCodePrompt as workerPrompt } from "./opencode.js";
+import { needsWindowsShell, resolveExecutable } from "../agents.js";
+import { openCodePrompt as workerPrompt } from "./opencode.js";
 import { ProcessWorkerSession } from "./process.js";
 
 export class ClaudeCodeAdapter implements AgentAdapter {
@@ -7,10 +8,11 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 
   async start(job: Job, context: string): Promise<WorkerSession> {
     const invocation = claudeCodeInvocation(job, context);
-    return new ProcessWorkerSession(invocation.binary, invocation.args, {
+    const binary = resolveExecutable(invocation.binary) ?? invocation.binary;
+    return new ProcessWorkerSession(binary, invocation.args, {
       cwd: job.definition.workingDirectory,
       env: { ...process.env, RUNI_JOB_ID: job.id, RUNI_ATTEMPT: String(job.attempts) },
-      shell: needsWindowsShell(invocation.binary),
+      shell: needsWindowsShell(binary),
     });
   }
 }

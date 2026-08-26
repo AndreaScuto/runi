@@ -16,9 +16,9 @@ Support OpenCode, Codex CLI, and Claude Code behind the same worker contract. Se
 
 Preserve hand-written task files while adding guided task creation from a short job. Grill mode may use the explicitly selected agent to turn an underspecified idea into user-chosen implementation decisions and an editable verification proposal; both modes must persist a normal task and converge on the existing supervision contract.
 
-Invoking `runi` without arguments opens a Leo-led interactive home for the common operations. Direct subcommands remain stable for automation and advanced use.
+Invoking `runi` without arguments opens a persistent Leo-led session whose primary prompt accepts a job directly; entering `/` opens the selectable command surface. `/doctor` explains agent availability, while `/settings` disables unavailable agents and persists a verified absolute executable path with the per-workspace authoring defaults. Defaults remain editable and never bypass the normal task, budget, or verification contract. Finite settings and persisted jobs are selected, while free text is reserved for goals, models, commands, and explicit custom answers. Direct subcommands remain stable for automation and advanced use. The primary prompt must remain single-line and avoid multiline autocomplete redraws that overlap in Windows terminals.
 
-Ship a tested scoped npm package through GitHub Packages for stable releases so developers can install the CLI without cloning the repository.
+Ship a tested public scoped package through the npm registry for stable releases so developers can install the CLI without cloning the repository or authenticating with GitHub.
 
 ## v0.3 — Structured intelligence
 

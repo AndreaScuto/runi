@@ -5,6 +5,19 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
+function quote(value: string): string {
+  return `"${value.replaceAll('"', '\\"')}"`;
+}
+
+function writeFakeCodex(directory: string): string {
+  const path = join(directory, process.platform === "win32" ? "codex.cmd" : "codex");
+  writeFileSync(path, process.platform === "win32"
+    ? "@echo off\r\nif \"%1\"==\"--version\" (echo codex-test 1.0& exit /b 0)\r\nif \"%1\"==\"login\" (echo Logged in using ChatGPT& exit /b 0)\r\nexit /b 0\r\n"
+    : "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex-test 1.0'; exit 0; fi\nif [ \"$1\" = \"login\" ]; then echo 'Logged in using ChatGPT'; exit 0; fi\nexit 0\n");
+  if (process.platform !== "win32") chmodSync(path, 0o755);
+  return path;
+}
+
 test("compiled CLI executes when invoked directly", () => {
   const result = spawnSync(process.execPath, [resolve("dist", "cli.js"), "help"], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
@@ -22,16 +35,124 @@ test("--help remains non-interactive", () => {
   assert.doesNotMatch(result.stdout, /Choose:/);
 });
 
-test("no-argument CLI opens Leo's interactive home screen", () => {
+test("doctor reports actionable coding-agent states", () => {
+  const workingDirectory = mkdtempSync(join(tmpdir(), "runi-doctor-"));
+  try {
+    const fakeCodex = writeFakeCodex(workingDirectory);
+    const result = spawnSync(process.execPath, [resolve("dist", "cli.js"), "doctor", "--workdir", workingDirectory], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${workingDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}` },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /codex\s+READY/);
+    assert.match(result.stdout, new RegExp(fakeCodex.replaceAll("\\", "\\\\")));
+    assert.match(result.stdout, /opencode\s+(?:READY|NOT FOUND|NOT AUTHENTICATED|NOT EXECUTABLE)/);
+    assert.match(result.stdout, /never reads or stores API keys/);
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+test("no-argument CLI opens Leo's slash-command session", () => {
   const result = spawnSync(process.execPath, [resolve("dist", "cli.js")], {
     encoding: "utf8",
-    input: "0\n",
+    input: "/\n14\n",
+    env: { ...process.env, FORCE_COLOR: "1" },
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /🐕 Leo is ready to supervise/);
-  assert.match(result.stdout, /Create a guided job/);
-  assert.match(result.stdout, /Show jobs/);
+  assert.match(result.stdout, /@\\___/);
+  assert.match(result.stdout, /\/guided/);
+  assert.match(result.stdout, /\/grill/);
+  assert.match(result.stdout, /\/doctor/);
+  assert.match(result.stdout, /What should Runi do\?/);
+  assert.doesNotMatch(result.stdout, /Search:/);
+  assert.match(result.stdout, /\x1b\[38;2;255;192;0m/);
+});
+
+test("slash settings persist workspace defaults", () => {
+  const workingDirectory = mkdtempSync(join(tmpdir(), "runi-settings-"));
+  try {
+    const fakeCodex = writeFakeCodex(workingDirectory);
+    const input = [
+      "/settings",
+      "2",
+      "gpt-5.4",
+      "2",
+      "3",
+      "2",
+      "/exit",
+    ].join("\n") + "\n";
+    const result = spawnSync(process.execPath, [resolve("dist", "cli.js")], {
+      cwd: workingDirectory,
+      encoding: "utf8",
+      input,
+      env: { ...process.env, PATH: `${workingDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}` },
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    const settings = JSON.parse(readFileSync(join(workingDirectory, ".runi", "settings.json"), "utf8"));
+    assert.deepEqual(settings, {
+      agent: "codex",
+      model: "gpt-5.4",
+      binary: fakeCodex,
+      maxAttempts: 2,
+      wallTime: "2h",
+      verificationPolicy: "ai",
+    });
+    assert.match(result.stdout, /Defaults saved/);
+    assert.match(result.stdout, /unavailable: NOT FOUND/);
+    assert.doesNotMatch(JSON.stringify(settings), /api.?key|token|secret/i);
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+test("AI guidance reports the original spawn error instead of exit code -1", () => {
+  const workingDirectory = mkdtempSync(join(tmpdir(), "runi-guidance-error-"));
+  try {
+    const missing = join(workingDirectory, process.platform === "win32" ? "missing-agent.exe" : "missing-agent");
+    const result = spawnSync(process.execPath, [
+      resolve("dist", "cli.js"),
+      "start",
+      "Refine this job",
+      "--grill",
+      "--workdir",
+      workingDirectory,
+    ], { encoding: "utf8", input: `codex\n${missing}\n\n` });
+
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /ENOENT|not found/i);
+    assert.doesNotMatch(result.stderr, /exit code -1/i);
+    assert.match(result.stderr, new RegExp(missing.replaceAll("\\", "\\\\")));
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+test("failed jobs print the worker root cause", () => {
+  const workingDirectory = mkdtempSync(join(tmpdir(), "runi-worker-error-"));
+  try {
+    const task = join(workingDirectory, "task.json");
+    writeFileSync(task, JSON.stringify({
+      goal: "Expose the real worker error",
+      executor: {
+        kind: "command",
+        command: `${quote(process.execPath)} -e "console.error('worker root cause'); process.exit(2)"`,
+      },
+      verification: [`${quote(process.execPath)} -e "process.exit(0)"`],
+      budget: { maxAttempts: 1, wallTime: "1m" },
+    }));
+
+    const result = spawnSync(process.execPath, [resolve("dist", "cli.js"), "start", task, "--workdir", workingDirectory], {
+      encoding: "utf8",
+    });
+
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stdout, /Last worker failure\s+worker root cause/);
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
 });
 
 test("grill mode refines the goal and lets users edit AI verification", () => {
@@ -48,7 +169,7 @@ test("grill mode refines the goal and lets users edit AI verification", () => {
       : `#!/bin/sh\nprintf '%s\\n' '${grill}' '${verification}'\n`);
     if (process.platform !== "win32") chmodSync(fakeAgent, 0o755);
 
-    const editedVerification = "node -e \"process.exit(0)\"";
+    const editedVerification = `${quote(process.execPath)} -e \"process.exit(0)\"`;
     const input = [
       "codex",
       fakeAgent,
@@ -70,7 +191,7 @@ test("grill mode refines the goal and lets users edit AI verification", () => {
       workingDirectory,
     ], { encoding: "utf8", input });
 
-    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
     assert.match(result.stdout, /Choose storage/);
     assert.match(result.stdout, /AI verification suggestions/);
     const taskFile = readdirSync(join(workingDirectory, ".runi", "tasks"))[0]!;
@@ -91,11 +212,11 @@ test("guided start turns a goal into a reusable supervised task", () => {
   try {
     const input = [
       "command",
-      "node -e \"console.log('guided worker')\"",
+      `${quote(process.execPath)} -e \"console.log('guided worker')\"`,
       "1",
       "1m",
       "manual",
-      "node -e \"process.exit(0)\"",
+      `${quote(process.execPath)} -e \"process.exit(0)\"`,
       "",
     ].join("\n") + "\n";
     const result = spawnSync(process.execPath, [
@@ -107,7 +228,7 @@ test("guided start turns a goal into a reusable supervised task", () => {
       workingDirectory,
     ], { encoding: "utf8", input });
 
-    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
     assert.match(result.stdout, /Worker agent/);
     assert.match(result.stdout, /Saved reusable task/);
     assert.match(result.stdout, /State\s+COMPLETE/);
@@ -118,7 +239,7 @@ test("guided start turns a goal into a reusable supervised task", () => {
       verification: string[];
     };
     assert.equal(task.goal, "Create a guided task");
-    assert.deepEqual(task.verification, ["node -e \"process.exit(0)\""]);
+    assert.deepEqual(task.verification, [`${quote(process.execPath)} -e \"process.exit(0)\"`]);
   } finally {
     rmSync(workingDirectory, { recursive: true, force: true });
   }
@@ -133,8 +254,12 @@ test("Leo visibly supervises a foreground job", () => {
       resolve("examples", "command-task.json"),
       "--workdir",
       workingDirectory,
+      "--command",
+      `${quote(process.execPath)} -e \"console.log('worker complete')\"`,
+      "--verify",
+      `${quote(process.execPath)} -e \"process.exit(0)\"`,
     ], { encoding: "utf8" });
-    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
     assert.match(result.stdout, /🐕 Leo · supervising/);
     assert.match(result.stdout, /State\s+COMPLETE/);
   } finally {
