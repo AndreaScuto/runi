@@ -1,12 +1,6 @@
 import type { Job } from "./domain.js";
 
-export interface BudgetStatus {
-  exceeded: boolean;
-  reason?: string;
-  elapsedMs: number;
-}
-
-export function checkBudget(job: Job, at = Date.now()): BudgetStatus {
+export function checkBudget(job: Job, at = Date.now()): { exceeded: boolean; reason?: string; elapsedMs: number } {
   const started = Date.parse(job.startedAt ?? job.createdAt);
   const elapsedMs = Math.max(0, at - started);
 

@@ -12,12 +12,8 @@ const transitions: Readonly<Record<JobStatus, readonly JobStatus[]>> = {
   budget_exceeded: [],
 };
 
-export function canTransition(from: JobStatus, to: JobStatus): boolean {
-  return transitions[from].includes(to);
-}
-
 export function assertTransition(from: JobStatus, to: JobStatus): void {
-  if (!canTransition(from, to)) {
+  if (!transitions[from].includes(to)) {
     throw new Error(`Invalid job transition: ${from} -> ${to}`);
   }
 }

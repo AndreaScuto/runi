@@ -11,7 +11,6 @@ export interface AgentDiagnostic {
   agent: CodingAgent;
   status: AgentStatus;
   binary?: string;
-  version?: string;
   detail: string;
 }
 
@@ -181,7 +180,6 @@ export async function diagnoseAgent(agent: CodingAgent, options: DiagnoseAgentOp
     const authOutput = auth.output.trim();
     const notAuthenticated = auth.exitCode !== 0
       || /\bnot logged in\b|\bnot authenticated\b|\bno (?:stored )?(?:credentials|providers?)\b|\b0 credentials\b/i.test(authOutput);
-    const versionText = firstLine(version.output);
     if (notAuthenticated) {
       if (agent === "opencode") {
         try {
@@ -191,7 +189,6 @@ export async function diagnoseAgent(agent: CodingAgent, options: DiagnoseAgentOp
               agent,
               status: "READY",
               binary,
-              ...(versionText === undefined ? {} : { version: versionText }),
               detail: "Installed and usable with OpenCode free models; no provider credential is stored.",
             };
           }
@@ -203,7 +200,6 @@ export async function diagnoseAgent(agent: CodingAgent, options: DiagnoseAgentOp
         agent,
         status: "NOT AUTHENTICATED",
         binary,
-        ...(versionText === undefined ? {} : { version: versionText }),
         detail: `Run '${agent === "codex" ? "codex login" : `${agent} auth login`}' in your terminal.`,
       };
     }
@@ -211,13 +207,8 @@ export async function diagnoseAgent(agent: CodingAgent, options: DiagnoseAgentOp
       agent,
       status: "READY",
       binary,
-      ...(versionText === undefined ? {} : { version: versionText }),
       detail: "Installed, executable and authenticated.",
     };
   }
   return { agent, status: "NOT EXECUTABLE", binary: candidates[0]!, detail: lastFailure };
-}
-
-export async function diagnoseAgents(options: DiscoveryEnvironment = {}): Promise<AgentDiagnostic[]> {
-  return Promise.all(CODING_AGENTS.map((agent) => diagnoseAgent(agent, options)));
 }

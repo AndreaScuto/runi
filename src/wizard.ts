@@ -3,8 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseDuration } from "./budget.js";
 import { ProcessWorkerSession } from "./adapters/process.js";
-import { needsWindowsShell } from "./adapters/opencode.js";
-import { resolveExecutable } from "./agents.js";
+import { needsWindowsShell, resolveExecutable } from "./agents.js";
 import type { AgentKind, ExecutorConfig } from "./domain.js";
 import { DEFAULT_RUNI_SETTINGS, type RuniSettings } from "./settings.js";
 

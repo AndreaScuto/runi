@@ -91,7 +91,6 @@ export interface VerificationResult {
 export interface AgentEvent {
   type: "stdout" | "stderr" | "status";
   message: string;
-  data?: Record<string, unknown>;
   createdAt: string;
 }
 

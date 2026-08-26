@@ -433,7 +433,7 @@ export async function run(argv: string[], ui?: InteractiveUi): Promise<number> {
   if (command === "resume") return resume(args);
   if (command === "stop") return stop(args);
   if (command === "settings") return settings(args, ui);
-  if (command === "agents" || command === "doctor") return doctor(args);
+  if (command === "doctor") return doctor(args);
   throw new Error(`Unknown command: ${command}`);
 }
 

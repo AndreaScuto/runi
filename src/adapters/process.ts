@@ -2,8 +2,8 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import { EventEmitter, on } from "node:events";
 import type { AgentEvent, WorkerResult, WorkerSession } from "../domain.js";
 
-function event(type: AgentEvent["type"], message: string, data?: Record<string, unknown>): AgentEvent {
-  return { type, message, ...(data === undefined ? {} : { data }), createdAt: new Date().toISOString() };
+function event(type: AgentEvent["type"], message: string): AgentEvent {
+  return { type, message, createdAt: new Date().toISOString() };
 }
 
 export class ProcessWorkerSession implements WorkerSession {

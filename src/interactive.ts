@@ -4,7 +4,7 @@ import { isCancel, log, note, select, text } from "@clack/prompts";
 const RESET = "\x1b[0m";
 const LEO_YELLOW = "\x1b[38;2;255;192;0m";
 
-export const LEO_FACE = String.raw`   / \__
+const LEO_FACE = String.raw`   / \__
   (    @\___
   /         O
  /   (_____/
@@ -49,7 +49,6 @@ const COMMANDS: InteractiveChoice[] = [
   { value: "/resume", label: "/resume", hint: "Resume a paused job" },
   { value: "/stop", label: "/stop", hint: "Stop a job" },
   { value: "/settings", label: "/settings", hint: "Change workspace job defaults" },
-  { value: "/agents", label: "/agents", hint: "Check installed coding agents" },
   { value: "/doctor", label: "/doctor", hint: "Diagnose coding-agent setup" },
   { value: "/help", label: "/help", hint: "Show command help" },
   { value: "/exit", label: "/exit", hint: "Leave Runi" },
@@ -60,7 +59,7 @@ function colorsEnabled(): boolean {
   return process.env.NO_COLOR === undefined && process.stdout.isTTY;
 }
 
-export function accent(value: string): string {
+function accent(value: string): string {
   return colorsEnabled() ? `${LEO_YELLOW}${value}${RESET}` : value;
 }
 
@@ -238,7 +237,7 @@ export async function runInteractive(actions: InteractiveActions, ui = createInt
         await dispatch(actions, ui, ["settings"]);
         continue;
       }
-      if (command === "/agents" || command === "/doctor") {
+      if (command === "/doctor") {
         await dispatch(actions, ui, ["doctor"]);
         continue;
       }

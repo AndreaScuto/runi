@@ -2,8 +2,6 @@ import type { AgentAdapter, Job, WorkerSession } from "../domain.js";
 import { needsWindowsShell, resolveExecutable } from "../agents.js";
 import { ProcessWorkerSession } from "./process.js";
 
-export { needsWindowsShell } from "../agents.js";
-
 export class OpenCodeAdapter implements AgentAdapter {
   readonly kind = "opencode" as const;
 
@@ -18,16 +16,11 @@ export class OpenCodeAdapter implements AgentAdapter {
   }
 }
 
-export interface OpenCodeInvocation {
-  binary: string;
-  args: string[];
-}
-
 /**
  * Shared by Runi and its benchmark harness so the direct and supervised modes
  * invoke the same OpenCode worker prompt and flags.
  */
-export function openCodeInvocation(job: Job, context: string): OpenCodeInvocation {
+export function openCodeInvocation(job: Job, context: string): { binary: string; args: string[] } {
   const args = ["run", "--format", "json"];
   if (job.definition.executor.autoApprove === true) args.push("--auto");
   if (job.definition.executor.model !== undefined) args.push("--model", job.definition.executor.model);

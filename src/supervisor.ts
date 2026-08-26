@@ -187,7 +187,6 @@ export class Supervisor {
   private recordAgentEvent(jobId: string, entry: AgentEvent): void {
     this.store.appendEvent(jobId, `AGENT_${entry.type.toUpperCase()}`, {
       message: entry.message.slice(0, 12_000),
-      ...(entry.data === undefined ? {} : { data: entry.data }),
     });
   }
 

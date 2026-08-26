@@ -50,6 +50,7 @@ test("slash-command session stays open and selects persisted jobs", async () => 
 
   assert.equal(code, 0);
   assert.match(information[0] ?? "", /\/guided/);
+  assert.doesNotMatch(information[0] ?? "", /\/agents/);
   assert.deepEqual(dispatched, [["inspect", "rn_persisted"]]);
 });
 
